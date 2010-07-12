@@ -22,6 +22,9 @@
 #include <linux/amba/bus.h>
 #include <linux/clk.h>
 #include <linux/scatterlist.h>
+#if defined (CONFIG_ARCH_LPC32XX)
+#include <linux/dma-mapping.h>
+#endif
 #include <linux/gpio.h>
 #include <linux/amba/mmci.h>
 #include <linux/regulator/consumer.h>
@@ -31,11 +34,148 @@
 #include <asm/io.h>
 #include <asm/sizes.h>
 
+#if defined (CONFIG_ARCH_LPC32XX)
+#include <mach/clkdev.h>
+#include <mach/dmac.h>
+#include <mach/sdcard.h>
+#include <mach/dma.h>
+#include <mach/hardware.h>
+#endif
+
 #include "mmci.h"
 
 #define DRIVER_NAME "mmci-pl18x"
 
+#if defined (CONFIG_ARCH_LPC32XX)
+static unsigned int fmax = 26000000; /* 26MHz bit rate max */
+
+#define DMA_BUFF_SIZE SZ_64K
+static void *dma_p_base, *dma_v_base;
+static struct dma_config dmacfgrx, dmacfgtx;
+static int lastch = DMA_CH_SDCARD_TX;
+
+#define MCI_WIDEBUS (1 << 11)
+#undef MCI_IRQENABLE
+#define MCI_IRQENABLE   \
+        (MCI_CMDCRCFAILMASK|MCI_DATACRCFAILMASK|MCI_CMDTIMEOUTMASK|     \
+        MCI_DATATIMEOUTMASK|MCI_TXUNDERRUNMASK|MCI_RXOVERRUNMASK|       \
+        MCI_CMDRESPENDMASK|MCI_CMDSENTMASK)
+
+#else
 static unsigned int fmax = 515633;
+#endif
+
+#if defined (CONFIG_ARCH_LPC32XX)
+static int mmc_dma_setup(void)
+{
+        /* Setup TX DMA channel */
+        dmacfgtx.ch = DMA_CH_SDCARD_TX;
+        dmacfgtx.tc_inten = 0;
+        dmacfgtx.err_inten = 0;
+        dmacfgtx.src_size = 4;
+        dmacfgtx.src_inc = 1;
+        dmacfgtx.src_ahb1 = 0;
+        dmacfgtx.src_bsize = DMAC_CHAN_SRC_BURST_8;
+        dmacfgtx.src_prph = DMAC_SRC_PERIP(DMA_PERID_SDCARD);
+        dmacfgtx.dst_size = 4;
+        dmacfgtx.dst_inc = 0;
+        dmacfgtx.dst_ahb1 = 0;
+        dmacfgtx.dst_bsize = DMAC_CHAN_DEST_BURST_8;
+        dmacfgtx.dst_prph = DMAC_DEST_PERIP(DMA_PERID_SDCARD);
+        dmacfgtx.flowctrl = DMAC_CHAN_FLOW_P_M2P;
+        if (lpc32xx_dma_ch_get(&dmacfgtx, "dma_sd_tx", NULL, NULL) < 0)
+        {
+                printk(KERN_ERR "Error setting up SD card TX DMA channel\n");
+                return -ENODEV;
+        }
+
+        /* Setup RX DMA channel */
+        dmacfgrx.ch = DMA_CH_SDCARD_RX;
+        dmacfgrx.tc_inten = 0;
+        dmacfgrx.err_inten = 0;
+        dmacfgrx.src_size = 4;
+        dmacfgrx.src_inc = 0;
+        dmacfgrx.src_ahb1 = 0;
+        dmacfgrx.src_bsize = DMAC_CHAN_SRC_BURST_8;
+        dmacfgrx.src_prph = DMAC_SRC_PERIP(DMA_PERID_SDCARD);
+        dmacfgrx.dst_size = 4;
+        dmacfgrx.dst_inc = 1;
+        dmacfgrx.dst_ahb1 = 0;
+        dmacfgrx.dst_bsize = DMAC_CHAN_DEST_BURST_8;
+        dmacfgrx.dst_prph = DMAC_DEST_PERIP(DMA_PERID_SDCARD);
+        dmacfgrx.flowctrl = DMAC_CHAN_FLOW_P_P2M;
+        if (lpc32xx_dma_ch_get(&dmacfgrx, "dma_sd_rx", NULL, NULL) < 0)
+        {
+                printk(KERN_ERR "Error setting up SD card RX DMA channel\n");
+                return -ENODEV;
+        }
+
+        return 0;
+}
+
+static void mmc_dma_start(int ch)
+{
+        if (ch == DMA_CH_SDCARD_TX)
+        {
+                lpc32xx_dma_start_pflow_xfer(DMA_CH_SDCARD_TX,
+                        dma_p_base, (void *) SD_FIFO(LPC32XX_SD_BASE), 1);
+        }
+        else
+        {
+                lpc32xx_dma_start_pflow_xfer(DMA_CH_SDCARD_RX,
+                        (void *) SD_FIFO(LPC32XX_SD_BASE), dma_p_base, 1); 
+        }
+}
+
+static void mmc_dma_stop(int ch)
+{
+        lpc32xx_dma_ch_disable(ch);
+}
+
+static void mmc_tx_dma_copy(struct mmci_host *host)
+{
+        char *src_buffer, *dst_buffer;
+        unsigned long flags;
+
+        dst_buffer = (char *) dma_v_base;
+        do
+        {
+                /*
+		 * Map the current scatter buffer, copy data, and unmap
+		 */
+                src_buffer = mmci_kmap_atomic(host, &flags) + host->sg_off;
+                memcpy(dst_buffer, src_buffer, host->sg_ptr->length);
+                dst_buffer += host->sg_ptr->length;
+                mmci_kunmap_atomic(host, src_buffer, &flags);
+
+                if (!mmci_next_sg(host))
+                        break;
+        } while (1);
+}
+
+static void mmc_dma_rx_copy(struct mmci_host *host)
+{
+        char *src_buffer, *dst_buffer;
+        unsigned long flags;
+
+        src_buffer = (char *) dma_v_base;
+        do
+        {
+                /*
+ 		 * Map the current scatter buffer, copy data, and unmap
+		 */
+                dst_buffer = mmci_kmap_atomic(host, &flags) + host->sg_off;
+                memcpy(dst_buffer, src_buffer, host->sg_ptr->length);
+                src_buffer += host->sg_ptr->length;
+                mmci_kunmap_atomic(host, dst_buffer, &flags);
+
+                flush_dcache_page(sg_page(host->sg_ptr));
+
+                if (!mmci_next_sg(host))
+                        break;
+        } while (1);
+}
+#endif
 
 /*
  * This must be called with host->lock held
@@ -94,11 +234,14 @@ static void mmci_stop_data(struct mmci_host *host)
 	writel(0, host->base + MMCIDATACTRL);
 	writel(0, host->base + MMCIMASK1);
 	host->data = NULL;
+#if defined(CONFIG_ARCH_LPC32XX)
+	mmc_dma_stop(lastch);
+#endif
 }
 
 static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 {
-	unsigned int datactrl, timeout, irqmask;
+	unsigned int datactrl, timeout, irqmask = 0;
 	unsigned long long clks;
 	void __iomem *base;
 	int blksz_bits;
@@ -119,6 +262,28 @@ static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 
 	base = host->base;
 	writel(timeout, base + MMCIDATATIMER);
+#if defined (CONFIG_ARCH_LPC32XX)
+        writel((host->size * data->blocks), base + MMCIDATALENGTH);
+
+        blksz_bits = ffs(data->blksz) - 1;
+        BUG_ON(1 << blksz_bits != data->blksz);
+
+        datactrl = MCI_DPSM_ENABLE | MCI_DPSM_DMAENABLE | blksz_bits << 4;
+        if (data->flags & MMC_DATA_READ) {
+                datactrl |= MCI_DPSM_DIRECTION;
+                lastch = DMA_CH_SDCARD_RX;
+        } else {
+                /* Copy data buffer to DMA buffer and start transfer */
+                lastch = DMA_CH_SDCARD_TX;
+                mmc_tx_dma_copy(host);
+        }
+        mmc_dma_start(lastch);
+
+        writel(datactrl, base + MMCIDATACTRL);
+        datactrl = readl(base + MMCIMASK0) & ~MCI_DATABLOCKENDMASK;
+        writel(datactrl | MCI_DATAENDMASK, base + MMCIMASK0);
+
+#else
 	writel(host->size, base + MMCIDATALENGTH);
 
 	blksz_bits = ffs(data->blksz) - 1;
@@ -145,6 +310,7 @@ static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 
 	writel(datactrl, base + MMCIDATACTRL);
 	writel(readl(base + MMCIMASK0) & ~MCI_DATAENDMASK, base + MMCIMASK0);
+#endif
 	writel(irqmask, base + MMCIMASK1);
 }
 
@@ -180,8 +346,14 @@ static void
 mmci_data_irq(struct mmci_host *host, struct mmc_data *data,
 	      unsigned int status)
 {
+#if defined (CONFIG_ARCH_LPC32XX)
+        if (status & MCI_DATAEND) {
+                host->data_xfered += data->blksz * data->blocks;
+#else
+
 	if (status & MCI_DATABLOCKEND) {
 		host->data_xfered += data->blksz;
+#endif
 #ifdef CONFIG_ARCH_U300
 		/*
 		 * On the U300 some signal or other is
@@ -204,16 +376,25 @@ mmci_data_irq(struct mmci_host *host, struct mmc_data *data,
 			data->error = -EIO;
 		status |= MCI_DATAEND;
 
+#if !defined (CONFIG_ARCH_LPC32XX)
 		/*
 		 * We hit an error condition.  Ensure that any data
 		 * partially written to a page is properly coherent.
 		 */
 		if (host->sg_len && data->flags & MMC_DATA_READ)
 			flush_dcache_page(sg_page(host->sg_ptr));
+#endif
 	}
 	if (status & MCI_DATAEND) {
 		mmci_stop_data(host);
-
+#if defined (CONFIG_ARCH_LPC32XX)
+                /* Copy DMA buffer to MMC buffer */
+                if (lastch == DMA_CH_SDCARD_RX)
+                {
+                        /* Copy DMA buffer to data buffer */
+                        mmc_dma_rx_copy(host);
+                }
+#endif
 		if (!data->stop) {
 			mmci_request_end(host, data->mrq);
 		} else {
@@ -409,7 +590,11 @@ static irqreturn_t mmci_irq(int irq, void *dev_id)
 
 		status = readl(host->base + MMCISTATUS);
 		status &= readl(host->base + MMCIMASK0);
+#if defined (CONFIG_ARCH_LPC32XX)
+                writel((status | MCI_DATABLOCKEND), host->base + MMCICLEAR);
+#else
 		writel(status, host->base + MMCICLEAR);
+#endif
 
 		dev_dbg(mmc_dev(host->mmc), "irq0 (data+cmd) %08x\n", status);
 
@@ -567,6 +752,9 @@ static int __devinit mmci_probe(struct amba_device *dev, struct amba_id *id)
 	struct mmci_host *host;
 	struct mmc_host *mmc;
 	int ret;
+#if defined (CONFIG_ARCH_LPC32XX)
+        dma_addr_t dma_handle;
+#endif
 
 	/* must have platform data */
 	if (!plat) {
@@ -574,10 +762,29 @@ static int __devinit mmci_probe(struct amba_device *dev, struct amba_id *id)
 		goto out;
 	}
 
-	ret = amba_request_regions(dev, DRIVER_NAME);
-	if (ret)
-		goto out;
+#if defined (CONFIG_ARCH_LPC32XX)
+        /* Allocate a chunk of memory for the DMA buffers */
+        dma_v_base = dma_alloc_coherent(&dev->dev, DMA_BUFF_SIZE,
+                &dma_handle, GFP_KERNEL);
+        if (dma_v_base == NULL)
+        {
+                printk("%s: error getting DMA region.\n", DRIVER_NAME);
+                ret = -ENOMEM;
+                goto out;
+        }
+        dma_p_base = (void *) dma_handle;
+        printk(KERN_INFO "%s: DMA buffer(%x bytes), P:0x%08x, V:0x%08x\n",
+                DRIVER_NAME, DMA_BUFF_SIZE, (u32) dma_p_base, (u32) dma_v_base);
+#endif
 
+	ret = amba_request_regions(dev, DRIVER_NAME);
+	if (ret) {
+#if defined (CONFIG_ARCH_LPC32XX)
+                goto out_free_dma;
+#else
+                goto out;
+#endif
+	}
 	mmc = mmc_alloc_host(sizeof(struct mmci_host), &dev->dev);
 	if (!mmc) {
 		ret = -ENOMEM;
@@ -685,6 +892,13 @@ static int __devinit mmci_probe(struct amba_device *dev, struct amba_id *id)
 	 */
 	mmc->max_blk_count = mmc->max_req_size;
 
+#if defined (CONFIG_ARCH_LPC32XX)
+        /*
+	 * Setup DMA for the interface
+	 */
+        mmc_dma_setup();
+#endif
+
 	spin_lock_init(&host->lock);
 
 	writel(0, host->base + MMCIMASK0);
@@ -717,9 +931,11 @@ static int __devinit mmci_probe(struct amba_device *dev, struct amba_id *id)
 	ret = request_irq(dev->irq[1], mmci_pio_irq, IRQF_SHARED, DRIVER_NAME " (pio)", host);
 	if (ret)
 		goto irq0_free;
-
+#if defined (CONFIG_ARCH_LPC32XX)
+        writel(MCI_IRQENABLE|MCI_DATAENDMASK, host->base + MMCIMASK0);
+#else
 	writel(MCI_IRQENABLE, host->base + MMCIMASK0);
-
+#endif
 	amba_set_drvdata(dev, mmc);
 	host->oldstat = mmci_get_cd(host->mmc);
 
@@ -755,6 +971,11 @@ static int __devinit mmci_probe(struct amba_device *dev, struct amba_id *id)
 	mmc_free_host(mmc);
  rel_regions:
 	amba_release_regions(dev);
+#if defined (CONFIG_ARCH_LPC32XX)
+ out_free_dma:
+        dma_free_coherent(&dev->dev, DMA_BUFF_SIZE,
+                dma_v_base, (dma_addr_t) dma_p_base);
+#endif
  out:
 	return ret;
 }
@@ -797,6 +1018,10 @@ static int __devexit mmci_remove(struct amba_device *dev)
 		mmc_free_host(mmc);
 
 		amba_release_regions(dev);
+#if defined (CONFIG_ARCH_LPC32XX)
+                dma_free_coherent(&dev->dev, DMA_BUFF_SIZE,
+                        dma_v_base, (dma_addr_t) dma_p_base);
+#endif
 	}
 
 	return 0;

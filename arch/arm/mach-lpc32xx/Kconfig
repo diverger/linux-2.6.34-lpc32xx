@@ -1,0 +1,103 @@
+if ARCH_LPC32XX
+
+choice
+    prompt "LPC32XX SoC based board implementations"
+    default MACH_PHY3250
+    help
+        This menu selects the LPC3250 board to support for this build
+
+    config MACH_PHY3250
+        bool "Phytec 3250 development board"
+        help
+            Support for the Phytec 3250 development board
+
+    config MACH_EA3250
+        bool "Embedded Artists LPC3250 Developer's Kit"
+        help
+            Support for the Embedded Artists LPC3250 Developer's Kit
+
+endchoice
+
+menu "Embedded Artists Display Selection"
+	depends on MACH_EA3250
+
+config EA3250_QVGA_3_2_LCD
+	bool "3.2 inch QVGA LCD display (RGB565)"
+	help
+	  Use 3.2 inch QVGA LCD display
+
+config EA3250_QVGA_2_8_OLED
+	bool "2.8 inch QVGA OLED display (RGB565)"
+	help
+	  Use 2.8 inch QVGA OLED display
+
+endmenu
+
+menu "Standard UARTS"
+
+config ARCH_LPC32XX_UART3_SELECT
+	bool "Add support for standard UART3"
+	help
+	 Adds support for standard UART 3 when the 8250 serial support
+	 is enabled.
+
+config ARCH_LPC32XX_UART4_SELECT
+	bool "Add support for standard UART4"
+	help
+	 Adds support for standard UART 4 when the 8250 serial support
+	 is enabled.
+
+config ARCH_LPC32XX_UART5_SELECT
+	bool "Add support for standard UART5"
+	default y
+	help
+	 Adds support for standard UART 5 when the 8250 serial support
+	 is enabled.
+
+config ARCH_LPC32XX_UART6_SELECT
+	bool "Add support for standard UART6"
+	help
+	 Adds support for standard UART 6 when the 8250 serial support
+	 is enabled.
+
+endmenu
+
+menu "High speed UARTS"
+
+config ARCH_LPC32XX_HSUART1_SELECT
+        bool "Add support for high speed UART1"
+        help
+                Enables high speed UART1 as a TTYSx device
+
+config ARCH_LPC32XX_HSUART2_SELECT
+        bool "Add support for high speed UART2"
+        help
+                Enables high speed UART2 as a TTYSx device
+
+config ARCH_LPC32XX_HSUART7_SELECT
+        bool "Add support for high speed UART7"
+        help
+                Enables high speed UART7 as a TTYSx device
+
+endmenu
+
+menu "LPC32XX chip components"
+
+config ARCH_LPC32XX_IRAM_FOR_NET
+        bool "Use IRAM for network buffers"
+        help
+          If the total combined required buffer sizes is larger than the
+          size of IRAM, then SDRAM will be used instead.
+
+config ARCH_LPC32XX_MII_SUPPORT
+        bool "Check to enable MII support or leave disabled for RMII support"
+        default FALSE
+        help
+          Say Y here to enable MII support, or N to RMII support. Regardless of
+          which support is selected, the ethernet interface driver needs to be
+          selected in the device driver networking section.
+
+endmenu
+
+endif
+

@@ -273,6 +273,15 @@ config KEYBOARD_LOCOMO
 	  To compile this driver as a module, choose M here: the
 	  module will be called locomokbd.
 
+config KEYBOARD_LPC32XX
+        tristate "LPC32XX matrix key scanner support"
+        depends on ARCH_LPC32XX
+        help
+          Say Y here if you want to use the LPC32XX keyscanner interface.
+
+          To compile this driver as a module, choose M here: the
+          module will be called lpc32xx_keys.
+
 config KEYBOARD_MAPLE
 	tristate "Maple bus keyboard"
 	depends on SH_DREAMCAST && MAPLE

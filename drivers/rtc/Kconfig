@@ -888,4 +888,10 @@ config RTC_DRV_MPC5121
 	  This driver can also be built as a module. If so, the module
 	  will be called rtc-mpc5121.
 
+config RTC_DRV_LPC32XX
+        depends on ARCH_LPC32XX
+        tristate "NXP LPC32XX RTC"
+        help
+          This enables support for the NXP 1-second RTC in the LPC32XX
+
 endif # RTC_CLASS

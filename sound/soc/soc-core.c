@@ -58,7 +58,7 @@ static int snd_soc_unregister_card(struct snd_soc_card *card);
  * It can be used to eliminate pops between different playback streams, e.g.
  * between two audio tracks.
  */
-static int pmdown_time = 5000;
+static int pmdown_time = 500;
 module_param(pmdown_time, int, 0);
 MODULE_PARM_DESC(pmdown_time, "DAPM stream powerdown time (msecs)");
 

@@ -201,7 +201,7 @@ config OMAP_WATCHDOG
 
 config PNX4008_WATCHDOG
 	tristate "PNX4008 Watchdog"
-	depends on ARCH_PNX4008
+	depends on ARCH_PNX4008 || ARCH_LPC32XX
 	help
 	  Say Y here if to include support for the watchdog timer
 	  in the PNX4008 processor.
