@@ -72,7 +72,7 @@ struct dma_channel {
 	u32 list_vstart; /* Allocated (virtual) address of list */
 	u32 list_pstart; /* Allocated (physical) address of list */
 	int free_entries; /* Number of free descriptors */
-	struct dma_list_ctrl *list_head, *list_tail;
+	struct dma_list_ctrl *list_head, *list_tail, *list_curr;
 };
 
 struct dma_control {
@@ -399,13 +399,17 @@ u32 lpc32xx_dma_alloc_llist(int ch,
 	if ((!VALID_CHANNEL(ch)) || (dma_ctrl.dma_channels[ch].name == NULL))
 		return 0;
 
-	/* Limit number of list entries */
+	/*
+	 * Limit number of list entries, but add 1 extra entry as a spot holder
+	 * for the end of the list
+	 */
 	if (entries < 2) {
 		entries = 2;
 	}
 	if (entries > 64) {
 		entries = 64;
 	}
+	entries++;
 
 	/* Save list information */
 	dma_ctrl.dma_channels[ch].list_entries = entries;
@@ -434,9 +438,10 @@ u32 lpc32xx_dma_alloc_llist(int ch,
 	pdmalist->prev_list_phy = lpc32xx_dma_llist_v_to_p(ch, (u32) pdmalist->prev_list_addr);
 
 	/* Save current free descriptors and current head/tail */
-	dma_ctrl.dma_channels[ch].free_entries = entries;
+	dma_ctrl.dma_channels[ch].free_entries = entries - 1;
 	dma_ctrl.dma_channels[ch].list_head = pdmalist;
 	dma_ctrl.dma_channels[ch].list_tail = pdmalist;
+	dma_ctrl.dma_channels[ch].list_curr = pdmalist;
 
 	return dma_ctrl.dma_channels[ch].list_vstart;
 }
@@ -486,8 +491,10 @@ extern void lpc32xx_dma_flush_llist(int ch) {
 		dma_ctrl.dma_channels[ch].list_vstart;
 	dma_ctrl.dma_channels[ch].list_tail = (struct dma_list_ctrl *)
 		dma_ctrl.dma_channels[ch].list_vstart;
+	dma_ctrl.dma_channels[ch].list_curr = (struct dma_list_ctrl *)
+		dma_ctrl.dma_channels[ch].list_vstart;
 	dma_ctrl.dma_channels[ch].free_entries =
-		dma_ctrl.dma_channels[ch].list_entries;
+		dma_ctrl.dma_channels[ch].list_entries - 1;
 }
 EXPORT_SYMBOL_GPL(lpc32xx_dma_flush_llist);
 
@@ -543,6 +550,24 @@ u32 lpc32xx_dma_queue_llist_entry(int ch,
 		__raw_writel(ctrl, DMACH_CONTROL(DMAIOBASE, ch));
 		__raw_writel(cfg, DMACH_CONFIG_CH(DMAIOBASE, ch));
 	}
+	else if (__raw_readl(DMACH_LLI(DMAIOBASE, ch)) == 0) {
+		/* Update current entry to next entry */
+		__raw_writel(dma_ctrl.dma_channels[ch].list_tail->next_list_phy,
+			DMACH_LLI(DMAIOBASE, ch));
+
+		/*
+		 * If the channel was stopped before the next entry made it into the
+		 * hardware descriptor, the next entry didn't make it there fast enough,
+		 * so load the new descriptor here.
+		 */
+		if ((__raw_readl(DMACH_CONFIG_CH(DMAIOBASE, ch)) & DMAC_CHAN_ENABLE) == 0) {
+			__raw_writel((u32) src, DMACH_SRC_ADDR(DMAIOBASE, ch));
+			__raw_writel((u32) dst, DMACH_DEST_ADDR(DMAIOBASE, ch));
+			__raw_writel(0, DMACH_LLI(DMAIOBASE, ch));
+			__raw_writel(ctrl, DMACH_CONTROL(DMAIOBASE, ch));
+			__raw_writel(cfg, DMACH_CONFIG_CH(DMAIOBASE, ch));
+		}
+	}
 
 	/* Process next link on next call */
 	dma_ctrl.dma_channels[ch].list_head = plhead->next_list_addr;
@@ -578,6 +603,69 @@ extern u32 lpc32xx_get_free_llist_entry(int ch) {
 	return (u32) pltail;
 }
 EXPORT_SYMBOL_GPL(lpc32xx_get_free_llist_entry);
+
+int lpc32xx_dma_start_xfer(int ch, u32 config)
+{
+	struct dma_list_ctrl *plhead;
+	
+	if ((!VALID_CHANNEL(ch)) || (dma_ctrl.dma_channels[ch].name == NULL) ||
+		(dma_ctrl.dma_channels[ch].list_vstart == 0))
+		return -1;
+
+	plhead = dma_ctrl.dma_channels[ch].list_head;
+	__dma_regs_lock();
+	__raw_writel(plhead->dmall.src, DMACH_SRC_ADDR(DMAIOBASE, ch));
+	__raw_writel(plhead->dmall.dest, DMACH_DEST_ADDR(DMAIOBASE, ch));
+	__raw_writel(plhead->dmall.next_lli, DMACH_LLI(DMAIOBASE, ch));
+	__raw_writel(plhead->dmall.ctrl, DMACH_CONTROL(DMAIOBASE, ch));
+	__raw_writel(config, DMACH_CONFIG_CH(DMAIOBASE, ch));
+	__dma_regs_unlock();
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(lpc32xx_dma_start_xfer);
+
+u32 lpc32xx_dma_queue_llist(int ch, void *src, void *dst,
+				  int size, u32 ctrl)
+{
+	struct dma_list_ctrl *plhead;
+
+	if ((!VALID_CHANNEL(ch)) || (dma_ctrl.dma_channels[ch].name == NULL) ||
+		(dma_ctrl.dma_channels[ch].list_vstart == 0))
+		return 0;
+
+	/* Exit if all the buffers are used */
+	if (dma_ctrl.dma_channels[ch].free_entries == 0) {
+		return 0;
+	}
+
+	/* Next available DMA link descriptor */
+	plhead = dma_ctrl.dma_channels[ch].list_curr;
+
+	/* Populate DMA linked data structure */
+	plhead->dmall.src = (u32) src;
+	plhead->dmall.dest = (u32) dst;
+	plhead->dmall.next_lli = 0;
+	plhead->dmall.ctrl = ctrl;
+
+	/* Append this link to the end of the previous link */
+	plhead->prev_list_addr->dmall.next_lli = lpc32xx_dma_llist_v_to_p(ch, (u32) plhead);
+
+	/* Decrement available buffers */
+	dma_ctrl.dma_channels[ch].free_entries--;
+
+	/* Process next link on next call */
+	dma_ctrl.dma_channels[ch].list_curr = plhead->next_list_addr;
+
+	return (u32) plhead;
+}
+EXPORT_SYMBOL_GPL(lpc32xx_dma_queue_llist);
+
+extern void lpc32xx_dma_force_burst(int ch, int src)
+{
+	__raw_writel(1 << src, DMA_SW_BURST_REQ(DMAIOBASE));
+}
+EXPORT_SYMBOL_GPL(lpc32xx_dma_force_burst);
 
 static irqreturn_t dma_irq_handler(int irq, void *dev_id)
 {
@@ -624,8 +712,6 @@ static int __init lpc32xx_dma_init(void)
 {
 	int ret;
 
-	printk(KERN_INFO "LPC32XX DMA driver\n");
-
 	ret = request_irq(IRQ_LPC32XX_DMA, dma_irq_handler, 0, "DMA", NULL);
 	if (ret) {
 		printk(KERN_CRIT "Wow!  Can't register IRQ for DMA\n");
@@ -657,5 +743,3 @@ out:
 	return ret;
 }
 arch_initcall(lpc32xx_dma_init);
-
-

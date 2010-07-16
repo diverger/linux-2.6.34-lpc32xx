@@ -28,7 +28,7 @@
  * seems to work ok for serial ACM, but eventually bonks out for MSC and
  * ether classes. Disabling this define will use FIFO mode for all EPs
  */
-//#define UDC_ENABLE_DMA
+#define UDC_ENABLE_DMA
 
 /*
  * controller driver data structures
@@ -150,6 +150,8 @@ struct lpc32xx_udc {
 	u32			suspended:1;
 	u32			selfpowered:1;
 	int                     ep0state;
+        atomic_t                enabled_ep_cnt;
+        wait_queue_head_t       ep_disable_wait_queue;
 };
 
 /*

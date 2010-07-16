@@ -235,6 +235,7 @@ static int __init ea3250_spi_devices_register(void)
 }
 arch_initcall(ea3250_spi_devices_register);
 
+#if defined (CONFIG_FB_ARMCLCD)
 /*
  * LCDC AMBA Driver Board Functions
  */
@@ -529,6 +530,7 @@ struct amba_device lpc32xx_clcd_device = {
         .dma_mask                       = ~0,
         .irq                            = {IRQ_LPC32XX_LCD, NO_IRQ},
 };
+#endif
 
 /*
  * SPI LCDC Driver Probe function
@@ -575,7 +577,9 @@ void __init ea3250_spi_lcdc_drv_init(void)
 /* AMBA based devices list */
 static struct amba_device *amba_devs[] __initdata = {
 	&lpc32xx_ssp0_device,
+#if defined (CONFIG_FB_ARMCLCD)
 	&lpc32xx_clcd_device,
+#endif
 };
 
 /*
@@ -610,27 +614,27 @@ static int nandwp_enable(int enable)
 
         return 1;
 }
-#define BLK_SIZE (1024 * 128)
+#define BLK_SIZE (2048 * 64)
 static struct mtd_partition __initdata ea3250_nand_partition[] = {
         {
                 .name   = "ea3250-boot",
                 .offset = 0,
-                .size   = (BLK_SIZE * 7)
+                .size   = (BLK_SIZE * 25)
+        },
+        {
+                .name   = "ea3250-uboot",
+                .offset = MTDPART_OFS_APPEND,
+                .size   = (BLK_SIZE * 100)
         },
         {
                 .name   = "ea3250-ubt-prms",
                 .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 1)
+                .size   = (BLK_SIZE * 2)
         },
         {
                 .name   = "ea3250-kernel",
                 .offset = MTDPART_OFS_APPEND,
                 .size   = (BLK_SIZE * 32)
-        },
-        {
-                .name   = "ea3250-rootfs",
-                .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 40)
         },
         {
                 .name   = "ea3250-jffs2",
@@ -675,11 +679,16 @@ static struct resource slc_nand_resources[] = {
         },
 
 };
+
+static u64 lpc32xx_slc_dma_mask = 0xffffffffUL;
 static struct platform_device lpc32xx_slc_nand_device = {
         .name           = "lpc32xx-nand",
         .id             = 0,
         .dev            = {
                                 .platform_data  = &lpc32xx_nandcfg,
+                                .dma_mask    = &lpc32xx_slc_dma_mask,
+                                .coherent_dma_mask = ~0UL,
+
         },
         .num_resources  = ARRAY_SIZE(slc_nand_resources),
         .resource       = slc_nand_resources,

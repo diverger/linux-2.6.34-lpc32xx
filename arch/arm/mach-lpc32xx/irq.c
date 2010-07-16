@@ -311,10 +311,6 @@ static int lpc32xx_irq_wake(unsigned int irqno, unsigned int state)
 		return 0;
 	}
 
-	/* Clear event */
-	__raw_writel(lpc32xx_events[irqno].mask,
-		lpc32xx_events[irqno].event_group->rawstat_reg);
-
 	return -ENODEV;
 }
 

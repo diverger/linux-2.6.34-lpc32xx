@@ -680,10 +680,45 @@ static int __devexit serial_hs_lpc32xx_remove(struct platform_device *pdev)
 	return 0;
 }
 
+
+#if defined (CONFIG_PM)
+static int serial_hs_lpc32xx_suspend(struct platform_device *dev, pm_message_t state)
+{
+	int i;
+
+	for (i = 0; i < uarts_registered; i++) {
+		struct lpc32xx_hsuart_port *p = &lpc32xx_hs_ports[i];
+
+		if (p->port.type != PORT_UNKNOWN && p->port.dev == &dev->dev)
+			uart_suspend_port(&lpc32xx_hs_reg, &p->port);
+	}
+
+	return 0;
+}
+
+static int serial_hs_lpc32xx_resume(struct platform_device *dev)
+{
+	int i;
+
+	for (i = 0; i < uarts_registered; i++) {
+		struct lpc32xx_hsuart_port *p = &lpc32xx_hs_ports[i];
+
+		if (p->port.type != PORT_UNKNOWN && p->port.dev == &dev->dev)
+			uart_resume_port(&lpc32xx_hs_reg, &p->port);
+	}
+
+	return 0;
+}
+#else
+#define serial_hs_lpc32xx_suspend	NULL
+#define serial_hs_lpc32xx_resume	NULL
+#endif
+
 static struct platform_driver serial_hs_lpc32xx_driver = {
 	.probe		= serial_hs_lpc32xx_probe,
 	.remove		= __devexit_p(serial_hs_lpc32xx_remove),
-	/* Suspend and resume are not needed, as the UART autoclocks */
+ 	.suspend	= serial_hs_lpc32xx_suspend,
+ 	.resume		= serial_hs_lpc32xx_resume,
 	.driver		= {
 		.name	= MODNAME,
 		.owner	= THIS_MODULE,

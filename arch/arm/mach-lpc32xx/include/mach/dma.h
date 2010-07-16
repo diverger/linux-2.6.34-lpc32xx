@@ -27,10 +27,11 @@
 
 #define MAX_DMA_CHANNELS 8
 
-#define DMA_CH_SDCARD_TX 0
-#define DMA_CH_SDCARD_RX 1
-#define DMA_CH_I2S_TX 2
-#define DMA_CH_I2S_RX 3
+#define DMA_CH_SDCARD_TX	0
+#define DMA_CH_SDCARD_RX	1
+#define DMA_CH_I2S_TX		2
+#define DMA_CH_I2S_RX		3
+#define DMA_CH_SLCNAND		4
 
 enum {
 	DMA_INT_UNKNOWN = 0,
@@ -99,6 +100,12 @@ extern u32 lpc32xx_dma_queue_llist_entry(int ch,
 					 void *dst,
 					 int size);
 extern u32 lpc32xx_get_free_llist_entry(int ch);
+extern u32 lpc32xx_dma_queue_llist(int ch,
+				   void *src,
+				   void *dst,
+				   int size,
+				   u32 ctrl);
+extern int lpc32xx_dma_start_xfer(int chan, u32 config);
+extern void lpc32xx_dma_force_burst(int ch, int src);
 
 #endif /* _ASM_ARCH_DMA_H */
-

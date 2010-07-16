@@ -67,6 +67,7 @@ struct lpc32xx_tsc_t {
 	void __iomem *tsc_base;
 	int irq;
 	struct clk *clk;
+	int suspended;
 };
 
 static void lpc32xx_fifo_clear(struct lpc32xx_tsc_t *lpc32xx_tsc_dat)
@@ -253,6 +254,8 @@ static int __devinit lpc32xx_ts_probe(struct platform_device *pdev)
 		goto err_free_irq;
 	}
 
+	device_init_wakeup(&pdev->dev, 1);
+
 	return 0;
 
 err_free_irq:
@@ -301,11 +304,52 @@ static int __devexit lpc32xx_ts_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#if defined (CONFIG_PM)
+static int lpc32xx_ts_suspend(struct device *dev)
+{
+	struct lpc32xx_tsc_t *lpc32xx_tsc_dat = dev_get_drvdata(dev);
+
+	if (device_may_wakeup(dev))
+		enable_irq_wake(lpc32xx_tsc_dat->irq);
+	else {
+		lpc32xx_tsc_dat->suspended = 1;
+		stop_tsc(lpc32xx_tsc_dat);
+		clk_disable(lpc32xx_tsc_dat->clk);
+	}
+
+	return 0;
+}
+
+static int lpc32xx_ts_resume(struct device *dev)
+{
+	struct lpc32xx_tsc_t *lpc32xx_tsc_dat = dev_get_drvdata(dev);
+
+	if (lpc32xx_tsc_dat->suspended) {
+		clk_enable(lpc32xx_tsc_dat->clk);
+		setup_tsc(lpc32xx_tsc_dat);
+		lpc32xx_tsc_dat->suspended = 0;
+	} else
+		disable_irq_wake(lpc32xx_tsc_dat->irq);
+
+	return 0;
+}
+
+static const struct dev_pm_ops lpc32xx_ts_pm_ops = {
+	.suspend	= lpc32xx_ts_suspend,
+	.resume		= lpc32xx_ts_resume,
+};
+#define LPC32XX_TS_PM_OPS (&lpc32xx_ts_pm_ops)
+#else
+#define LPC32XX_TS_PM_OPS NULL
+#endif
+
 static struct platform_driver lpc32xx_ts_driver = {
 	.probe		= lpc32xx_ts_probe,
 	.remove		= __devexit_p(lpc32xx_ts_remove),
 	.driver		= {
 		.name	= MOD_NAME,
+		.owner	= THIS_MODULE,
+		.pm	= LPC32XX_TS_PM_OPS,
 	},
 };
 

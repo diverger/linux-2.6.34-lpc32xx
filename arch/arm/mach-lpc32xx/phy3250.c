@@ -52,7 +52,8 @@
 #define LED_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)
 #define NAND_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 19)
 #define	MMC_PWR_ENABLE_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)
-#define	MMC_STATUS_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 1)
+#define	MMC_CD_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 1)
+#define	MMC_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 0)
 
 /*
  * AMBA LCD controller
@@ -337,23 +338,15 @@ static struct platform_device lpc32xx_kscan_device = {
 };
 
 #if defined (CONFIG_MMC_ARMMMCI)
-/*
- * Returns 0 when card is removed, !0 when installed
- */
-unsigned int mmc_status(struct device *dev)
+static u32 mmc_translate_vdd(struct device *dev, unsigned int vdd)
 {
-	return gpio_get_value(MMC_STATUS_GPIO) & 1;
-}
-
-/*
- * Enable or disable SD slot power
- */
-void mmc_power_enable(int enable)
-{
-	if (enable != 0)
+	/* Only on and off are supported */
+	if (vdd != 0)
 		gpio_set_value(MMC_PWR_ENABLE_GPIO,1);
 	else
 		gpio_set_value(MMC_PWR_ENABLE_GPIO,0);
+
+	return 0;
 }
 
 /*
@@ -361,10 +354,10 @@ void mmc_power_enable(int enable)
  */
 struct mmci_platform_data lpc32xx_plat_data = {
         .ocr_mask       = MMC_VDD_30_31|MMC_VDD_31_32|MMC_VDD_32_33|MMC_VDD_33_34,
-        .status         = mmc_status,
+	.translate_vdd	= mmc_translate_vdd,
 	.capabilities   = MMC_CAP_4_BIT_DATA,
-        .gpio_wp        = -1,
-        .gpio_cd        = -1,
+        .gpio_wp        = MMC_WP_GPIO,
+        .gpio_cd        = MMC_CD_GPIO,
 };
 
 /*
@@ -405,12 +398,17 @@ static struct mtd_partition __initdata phy3250_nand_partition[] = {
         {
                 .name   = "phy3250-boot",
                 .offset = 0,
-                .size   = (BLK_SIZE * 90)
+                .size   = (BLK_SIZE * 25)
+        },
+        {
+                .name   = "phy3250-uboot",
+                .offset = MTDPART_OFS_APPEND,
+                .size   = (BLK_SIZE * 100)
         },
         {
                 .name   = "phy3250-ubt-prms",
                 .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 10)
+                .size   = (BLK_SIZE * 4)
         },
         {
                 .name   = "phy3250-kernel",
@@ -460,11 +458,14 @@ static struct resource slc_nand_resources[] = {
         },
 
 };
+static u64 lpc32xx_slc_dma_mask = 0xffffffffUL;
 static struct platform_device lpc32xx_slc_nand_device = {
         .name           = "lpc32xx-nand",
         .id             = 0,
         .dev            = {
                                 .platform_data  = &lpc32xx_nandcfg,
+                                .dma_mask    = &lpc32xx_slc_dma_mask,
+                                .coherent_dma_mask = ~0UL,
         },
         .num_resources  = ARRAY_SIZE(slc_nand_resources),
         .resource       = slc_nand_resources,
@@ -555,10 +556,12 @@ static void __init phy3250_board_init(void)
 		printk(KERN_ERR "Error setting gpio %u to output",
 				SPI0_CS_GPIO);
 
-#if defined (CONFIG_MMC_ARMMMCI)
-        /* Enable SD slot power */
-        mmc_power_enable(1);
-#endif
+	if (gpio_request(MMC_PWR_ENABLE_GPIO, "mmc_power_en"))
+		printk(KERN_ERR "Error requesting gpio %u",
+				MMC_PWR_ENABLE_GPIO);
+	else if (gpio_direction_output(MMC_PWR_ENABLE_GPIO, 1))
+		printk(KERN_ERR "Error setting gpio %u to output",
+				MMC_PWR_ENABLE_GPIO);
 
 	/* Setup network interface for RMII mode */
 	tmp = __raw_readl(LPC32XX_CLKPWR_MACCLK_CTRL);
@@ -645,6 +648,51 @@ static int __init lpc32xx_display_uid(void)
 	return 1;
 }
 arch_initcall(lpc32xx_display_uid);
+
+/*
+ * Example code for setting up the BTN1 button (on GPI3) for system
+ * wakeup and IRQ support. This will allow the GPI3 input to wake
+ * up the system on a low edge. Edge based interrupts won't be
+ * registered in the interrupt controller when the system is asleep,
+ * although they will be registered in the event manager. For this,
+ * reason, a level based interrupt state is recommended for GPIOs when
+ * using IRQ and wakeup from GPI edge state.
+ * 
+ */
+#define BTN1_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 3)
+static irqreturn_t phy3250_btn1_irq(int irq, void *dev)
+{
+	printk(KERN_INFO "GPIO IRQ!\n");
+
+	return IRQ_HANDLED;
+}
+
+static int __init phy3250_button_setup(void)
+{
+	int ret;
+
+	if (gpio_request(BTN1_GPIO, "Button 1")) {
+		printk(KERN_ERR "Error requesting gpio %u", BTN1_GPIO);
+		return 0;
+	}
+
+	/*
+	 * Wakeup/irq on low edge - the wakeup state will use the same
+	 * state as the IRQ edge state.
+	 */
+	set_irq_type(IRQ_LPC32XX_GPI_03, IRQ_TYPE_EDGE_FALLING);
+	ret = request_irq(IRQ_LPC32XX_GPI_03, phy3250_btn1_irq,
+		IRQF_DISABLED, "gpio_btn1_irq", NULL);
+	if (ret < 0) {
+		printk(KERN_ERR "Can't request interrupt\n");
+		return 0;
+	}
+
+	enable_irq_wake(IRQ_LPC32XX_GPI_03);
+
+	return 1;
+}
+device_initcall(phy3250_button_setup);
 
 MACHINE_START(PHY3250, "Phytec 3250 board with the LPC3250 Microcontroller")
 	/* Maintainer: Kevin Wells, NXP Semiconductors */

@@ -431,13 +431,18 @@ static int local_usbpll_enable(struct clk *clk, int enable)
 		/*
 		 * Gate clock from PLL if PLL is locked
 		 */
-		if (ret == 0)
+		if (ret == 0) {
 			__raw_writel(reg | LPC32XX_CLKPWR_USBCTRL_CLK_EN2,
 				LPC32XX_CLKPWR_USB_CTRL);
-		else
+		}
+		else {
 			__raw_writel(reg & ~(LPC32XX_CLKPWR_USBCTRL_CLK_EN1 |
 				LPC32XX_CLKPWR_USBCTRL_PLL_PWRUP),
 				LPC32XX_CLKPWR_USB_CTRL);
+		}
+	} else if ((enable == 0) && usb_pll_valid  && usb_pll_enable) {
+		usb_pll_valid = 0;
+		usb_pll_enable = 0;
 	}
 
 	return ret;
@@ -488,9 +493,6 @@ static int local_usbpll_set_rate(struct clk *clk, unsigned long rate)
 	if (local_clk_find_pll_cfg(clkin, rate, &pllsetup) == 0)
 		return -EINVAL;
 
-	usb_pll_valid = 1;
-	usb_pll_enable = 1;
-
 	/*
 	 * Disable PLL clocks during PLL change
 	 */
@@ -501,7 +503,10 @@ static int local_usbpll_set_rate(struct clk *clk, unsigned long rate)
 	/*
 	 * Start USB PLL and check PLL status
 	 */
+
+	usb_pll_valid = 1;
 	usb_pll_enable = 1;
+
 	ret = local_usbpll_enable(clk, 1);
 	if (ret >= 0)
 		clk->rate = clk_check_pll_setup(clkin, &pllsetup);
@@ -766,6 +771,10 @@ static int mmc_onoff_enable(struct clk *clk, int enable)
 	if (enable != 0)
 		tmp |= LPC32XX_CLKPWR_MSCARD_SDCARD_EN;
 
+	/* Start clock at highest rate */
+	if (!(tmp & LPC32XX_CLKPWR_MSCARD_SDCARD_DIV(0xF)))
+		tmp |= LPC32XX_CLKPWR_MSCARD_SDCARD_DIV(1);
+
 	__raw_writel(tmp, LPC32XX_CLKPWR_MS_CTRL);
 
 	return 0;
@@ -773,14 +782,9 @@ static int mmc_onoff_enable(struct clk *clk, int enable)
 
 static unsigned long mmc_get_rate(struct clk *clk)
 {
-	u32 div, rate, oldclk;
+	u32 div, rate;
 
-	/* The MMC clock must be on when accessing an MMC register */
-	oldclk = __raw_readl(LPC32XX_CLKPWR_MS_CTRL);
-	__raw_writel(oldclk | LPC32XX_CLKPWR_MSCARD_SDCARD_EN,
-		LPC32XX_CLKPWR_MS_CTRL);
 	div = __raw_readl(LPC32XX_CLKPWR_MS_CTRL);
-	__raw_writel(oldclk, LPC32XX_CLKPWR_MS_CTRL);
 
 	/* Get the parent clock rate */
 	rate = clk->parent->get_rate(clk->parent);
@@ -808,12 +812,19 @@ static unsigned long mmc_round_rate(struct clk *clk, unsigned long rate)
 	if (div > 0xf)
 		div = 0xf;
 
+	/*
+	 * The divider is forced to 1 to keep the SD clock granularity
+	 * good. Using a non-0 divider will limit the SD card clock rates
+	 * the SD driver can generate. Remove it if your feeling crazy.
+	 */
+	div = 1;
+
 	return prate / div;
 }
 
 static int mmc_set_rate(struct clk *clk, unsigned long rate)
 {
-	u32 oldclk, tmp;
+	u32 tmp;
 	unsigned long prate, div, crate = mmc_round_rate(clk, rate);
 
 	prate = clk->parent->get_rate(clk->parent);
@@ -821,19 +832,17 @@ static int mmc_set_rate(struct clk *clk, unsigned long rate)
 	div = prate / crate;
 
 	/* The MMC clock must be on when accessing an MMC register */
-	oldclk = __raw_readl(LPC32XX_CLKPWR_MS_CTRL);
-	__raw_writel(oldclk | LPC32XX_CLKPWR_MSCARD_SDCARD_EN,
-		LPC32XX_CLKPWR_MS_CTRL);
 	tmp = __raw_readl(LPC32XX_CLKPWR_MS_CTRL) &
 		~LPC32XX_CLKPWR_MSCARD_SDCARD_DIV(0xf);
 	tmp |= LPC32XX_CLKPWR_MSCARD_SDCARD_DIV(div);
 	__raw_writel(tmp, LPC32XX_CLKPWR_MS_CTRL);
 
-	__raw_writel(oldclk, LPC32XX_CLKPWR_MS_CTRL);
-
 	return 0;
 }
 
+/*
+ * This is the MMC IP clock, not the MMC CLK signal rate!
+ */
 static struct clk clk_mmc = {
 	.parent		= &clk_armpll,
 	.set_rate	= mmc_set_rate,

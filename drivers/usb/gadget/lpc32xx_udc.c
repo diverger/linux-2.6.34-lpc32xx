@@ -270,7 +270,7 @@ static int isp1301_probe(struct i2c_client *client, const struct i2c_device_id *
 static int isp1301_remove(struct i2c_client *client);
 
 static const unsigned short normal_i2c[] =
-{ ISP1301_I2C_ADDR, I2C_CLIENT_END };
+{ ISP1301_I2C_ADDR, ISP1301_I2C_ADDR + 1, I2C_CLIENT_END };
 
 static const struct i2c_device_id isp1301_id[] = {
 	{ "isp1301_pnx", 0 },
@@ -1019,9 +1019,15 @@ static void udc_set_address(struct lpc32xx_udc *udc, u32 addr) {
 /* USB device reset - resets USB to a default state with just EP0
    enabled */
 static void uda_usb_reset(struct lpc32xx_udc *udc) {
+	u32 i = 0;
 	/* Re-init device controller and EP0 */
 	udc_enable(udc);
 	udc->gadget.speed = USB_SPEED_FULL;
+	
+	for (i = 1; i < NUM_ENDPOINTS; i++) {
+		struct lpc32xx_ep *ep = &udc->ep[i];
+		ep->req_pending = 0;
+	}
 }
 
 /* Send a ZLP on EP0 */
@@ -1152,9 +1158,19 @@ static void stop_activity(struct lpc32xx_udc *udc)
 		struct lpc32xx_ep *ep = &udc->ep[i];
 		nuke(ep, -ESHUTDOWN);
 	}
-	if (driver)
+	if (driver) {
 		driver->disconnect(&udc->gadget);
+                /*
+		 *  Wait for all the endpoints to disable,
+		 *  before disabling clocks. Don't wait if 
+		 *  endpoints are not enabled. 
+		 */
+		if(atomic_read(&udc->enabled_ep_cnt))
+			wait_event_interruptible(udc->ep_disable_wait_queue,
+					(atomic_read(&udc->enabled_ep_cnt) == 0));
+	}
 
+	isp1301_pullup_enable(0);
 	udc_disable(udc);
 	udc_reinit(udc);
 }
@@ -1215,6 +1231,9 @@ static int lpc32xx_ep_disable (struct usb_ep * _ep)
 	ep->hwep_num = 0;
 
 	local_irq_restore(flags);
+
+        atomic_dec(&udc->enabled_ep_cnt);
+        wake_up(&udc->ep_disable_wait_queue);
 
 	return 0;
 }
@@ -1318,6 +1337,7 @@ static int lpc32xx_ep_enable(struct usb_ep *_ep,
 
 	local_irq_restore(flags);
 
+	atomic_inc(&udc->enabled_ep_cnt);
 	return 0;
 }
 
@@ -1561,17 +1581,15 @@ static int udc_ep_in_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep)
 {
 	struct lpc32xx_request *req;
 	u32 hwep = ep->hwep_num;
-	u32 epstatus;
 
 	ep->req_pending = 1;
-	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
 
 	/* There will always be a request waiting here */
 	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
 
 	/* Place the DD Descriptor into the UDCA */
 	udc->udca_v_base[hwep] = (u32) req->dd_desc_ptr->this_dma;
-	udelay(100);
+	
 	/* Enable DMA and interrupt for the HW EP */
 	udc_ep_dma_enable(udc, hwep);
 
@@ -1593,7 +1611,7 @@ static int udc_ep_out_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep)
 
 	/* Place the DD Descriptor into the UDCA */
 	udc->udca_v_base[hwep] = (u32) req->dd_desc_ptr->this_dma;
-	udelay(100);
+	
 	/* Enable DMA and interrupt for the HW EP */
 	udc_ep_dma_enable(udc, hwep);
 
@@ -1627,11 +1645,13 @@ void udc_handle_eps(struct lpc32xx_udc *udc, u32 epints) {
 	done(ep, req, 0);
 
 	/* Start another request if ready */
-	if (!list_entry(ep->queue.next, struct lpc32xx_request, queue)) {
-		if (ep->is_in)
+	if(!list_empty((&ep->queue))) {
+		if (ep->is_in) {
 			udc_ep_in_req_dma(udc, ep);
-		else
+		}
+		else {
 			udc_ep_out_req_dma(udc, ep);
+		}
 	}
 	else
 		ep->req_pending = 0;
@@ -1650,14 +1670,13 @@ void udc_send_in_zlp(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep,
 
 /* DMA end of transfer completion */
 static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
-	u32 status, epstatus;
+	u32 status;
 	struct lpc32xx_request *req;
 	struct lpc32xx_usbd_dd_gad *dd;
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 	ep->totalints++;
 #endif
-
 	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
 	if (!req) {
 		ep_err(ep, "DMA interrupt on no req!\n");
@@ -1761,36 +1780,18 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 	/* Transfer request is complete */
 	done(ep, req, 0);
 
-	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
+	udc_clearep_getsts(udc, ep->hwep_num);
+	/* Start another request if ready */
 	if(!list_empty((&ep->queue))) {
-		if (ep->is_in)
+		if (ep->is_in) {
 			udc_ep_in_req_dma(udc, ep);
-		else
+		}
+		else {
 			udc_ep_out_req_dma(udc, ep);
+		}
 	}
 	else 
 		ep->req_pending = 0;
-#if 0
-	bufst = epstatus & EP_SEL_F;
-
-	if (ep->is_in) {
-		if(list_empty((&ep->queue))) {
-
-			if (!bufst)
-				return;
-		}
-		ep->req_pending = 0;
-		if(bufst)
-			return;
-	}
-
-	if(!list_empty((&ep->queue))) {
-		if (ep->is_in) 
-			udc_ep_in_req_dma(udc, ep);
-		else
-			udc_ep_out_req_dma(udc, ep);
-	}
-#endif
 }
 
 #else
@@ -2749,21 +2750,6 @@ static int vbus_handler_thread(void *udc_)
 
 	/* The main loop */
 	while (!kthread_should_stop()) {
-		/* Get the interrupt from the transceiver */
-		value = i2c_read(ISP1301_I2C_INTERRUPT_LATCH);
-
-		/* Discharge VBUS real quick */
-		i2c_write(OTG1_VBUS_DISCHRG, ISP1301_I2C_OTG_CONTROL_1);
-
-		/* Give VBUS some time (200mS) to discharge */
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		schedule_timeout(200 / (1000 / HZ));
-		set_current_state(TASK_INTERRUPTIBLE);
-
-		/* Disable VBUS discharge resistor */
-		i2c_write(OTG1_VBUS_DISCHRG,
-				(ISP1301_I2C_OTG_CONTROL_1 | ISP1301_I2C_REG_CLEAR_ADDR));
-
 		if (udc->enabled != 0) {
 			/* Get the VBUS status from the transceiver */
 			value = i2c_read(ISP1301_I2C_OTG_CONTROL_2);
@@ -2790,9 +2776,6 @@ static int vbus_handler_thread(void *udc_)
 			}
 		}
 
-		/* Clear interrupt */
-		i2c_write(~0, ISP1301_I2C_INTERRUPT_LATCH | ISP1301_I2C_REG_CLEAR_ADDR);
-
 		/* sleep if nothing to send */
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
@@ -2807,6 +2790,19 @@ static irqreturn_t lpc32xx_usb_vbus_irq(int irq, void *_udc)
 {
 	struct lpc32xx_udc *udc = _udc;
 
+	/* Discharge VBUS real quick */
+	i2c_write(OTG1_VBUS_DISCHRG, ISP1301_I2C_OTG_CONTROL_1);
+	
+	/* Give VBUS some time (100mS) to discharge */
+	msleep(100);
+
+	/* Disable VBUS discharge resistor */
+	i2c_write(OTG1_VBUS_DISCHRG,
+			(ISP1301_I2C_OTG_CONTROL_1 | ISP1301_I2C_REG_CLEAR_ADDR));
+	
+	/* Clear interrupt */
+	i2c_write(~0, ISP1301_I2C_INTERRUPT_LATCH | ISP1301_I2C_REG_CLEAR_ADDR);
+	
 	/* Kick off the VBUS handler thread */
 	udc->thread_wakeup_needed = 1;
 	wake_up_process(udc->thread_task);
@@ -3093,12 +3089,16 @@ static int __init lpc32xx_udc_probe(struct platform_device *pdev)
 
 	/* The transceiver interrupt is used for VBUS detection and will
 	   kick off the VBUS handler thread */
-	retval = request_irq(udc->udp_irq[IRQ_USB_ATX], lpc32xx_usb_vbus_irq,
-			IRQF_ONESHOT, "udc_otg", udc);
+	retval = request_threaded_irq(udc->udp_irq[IRQ_USB_ATX], NULL, lpc32xx_usb_vbus_irq,
+				 IRQF_ONESHOT, "udc_otg", udc);
 	if (retval < 0) {
 		dev_err(udc->dev, "VBUS request irq %d failed\n", udc->udp_irq[IRQ_USB_ATX]);
 		goto irq_xcvr_fail;
 	}
+
+        /* Initialize wait queue */
+        init_waitqueue_head(&udc->ep_disable_wait_queue);
+        atomic_set(&udc->enabled_ep_cnt,0);
 
 	/* Keep VBUS IRQ disabled until GadgetFS starts up */
 	disable_irq(udc->udp_irq[IRQ_USB_ATX]);
@@ -3131,6 +3131,8 @@ dma2_alloc_fail:
 dma_alloc_fail:
 	iounmap(udc->udp_baseaddr);
 io_map_fail:
+        i2c_unregister_device(isp1301_i2c_client);
+        isp1301_i2c_client = NULL;
 i2c_probe_fail:
 	i2c_del_driver(&isp1301_driver);
 i2c_add_fail:
@@ -3160,8 +3162,6 @@ static int __exit lpc32xx_udc_remove(struct platform_device *pdev)
 	udc_disable(udc);
 	pullup(udc, 0);
 
-	if (udc->irq_asrtd == 1)
-		disable_irq(udc->udp_irq[IRQ_USB_ATX]);
 	free_irq(udc->udp_irq[IRQ_USB_ATX], udc);
 
 	device_init_wakeup(&pdev->dev, 0);
@@ -3182,6 +3182,8 @@ static int __exit lpc32xx_udc_remove(struct platform_device *pdev)
 	clk_disable(udc->usb_pll_clk);
 	clk_put(udc->usb_pll_clk);
 	iounmap(udc->udp_baseaddr);
+	i2c_unregister_device(isp1301_i2c_client);
+	isp1301_i2c_client = NULL;
 	i2c_del_driver(&isp1301_driver);
 	release_mem_region(udc->io_p_start, udc->io_p_size);
 

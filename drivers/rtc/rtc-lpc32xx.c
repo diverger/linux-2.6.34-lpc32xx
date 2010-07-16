@@ -305,7 +305,7 @@ static int __devinit lpc32xx_rtc_probe(struct platform_device *pdev)
 	}
 
 	retval = request_irq(lpc32xx_rtc_dat->irq, lpc32xx_rtc_alarm_interrupt,
-		0, "rtcalarm", lpc32xx_rtc_dat);
+		IRQF_DISABLED, "rtcalarm", lpc32xx_rtc_dat);
 	if (retval < 0) {
 		dev_err(&pdev->dev, "Can't request interrupt\n");
 		goto err_free_irq;
@@ -346,18 +346,12 @@ static int lpc32xx_rtc_suspend(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct lpc32xx_rtc_priv *lpc32xx_rtc_dat =
 		platform_get_drvdata(pdev);
-	u32 tmp;
-
-	spin_lock_irq(&lpc32xx_rtc_dat->lock);
-	tmp = readl(RTC_CTRL(lpc32xx_rtc_dat->rtc_base));
 
 	if (device_may_wakeup(&pdev->dev))
-		tmp |= RTC_MATCH0_EN;
+		enable_irq_wake(lpc32xx_rtc_dat->irq);
 	else
-		tmp &= ~RTC_MATCH0_EN;
+		disable_irq_wake(lpc32xx_rtc_dat->irq);
 
-	writel(tmp, RTC_CTRL(lpc32xx_rtc_dat->rtc_base));
-	spin_unlock_irq(&lpc32xx_rtc_dat->lock);
 
 	return 0;
 }
