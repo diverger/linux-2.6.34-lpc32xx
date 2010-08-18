@@ -56,6 +56,7 @@
 #define	LCD_CS_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 4)
 #define	LCD_RS_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)
 #define	BKL_POW_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 14)
+#define	SSEL0_GPIO5	LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 5)
 
 /*
  * LCD controller functions
@@ -310,6 +311,11 @@ static int lpc32xx_clcd_setup(struct clcd_fb *fb)
         fb->fb.fix.smem_start = dma;
         fb->fb.fix.smem_len = PANEL_SIZE;
         fb->panel = &conn_lcd_panel;
+
+	if (gpio_request(SSEL0_GPIO5, "Unused GPIO5 input"))
+		return -EIO;
+	if(gpio_direction_input(SSEL0_GPIO5))
+		return -EIO;
 
         /* Configure LCDC RS GPIO pin */
         if (gpio_request(LCD_RS_GPIO, "LCDC RS"))
