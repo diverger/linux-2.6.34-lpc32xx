@@ -1618,34 +1618,23 @@ static int udc_ep_out_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep)
 	return 0;
 }
 
-/* This function is only called for IN ZLP transfer completions */
-void udc_handle_eps(struct lpc32xx_udc *udc, u32 epints) {
-	int hwep = -1, i = 0;
+/* Handle EP completion */
+void udc_handle_eps(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 	u32 epstatus;
-	struct lpc32xx_ep *ep;
 	struct lpc32xx_request *req;
-	const int ineps[] = {2, 5, 8, 11, 15, -1};
 
-	/* Find the IN EP that generated the interrupt */
-	while (ineps[i] != 0) {
-		if (epints & (1 << ineps[i]))
-			hwep = ineps[i];
-		i++;
-	}
+	uda_disable_hwepint(udc, ep->hwep_num);
 
-	uda_disable_hwepint(udc, hwep);
-
-	if (hwep <= 0)
+	if (ep->hwep_num <= 0)
 		return;
 
-	epstatus = udc_clearep_getsts(udc, hwep);
+	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
 
-	ep = &udc->ep[hwep];
 	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
 	done(ep, req, 0);
 
 	/* Start another request if ready */
-	if(!list_empty((&ep->queue))) {
+	if(!list_empty(&ep->queue)) {
 		if (ep->is_in) {
 			udc_ep_in_req_dma(udc, ep);
 		}
@@ -2695,18 +2684,17 @@ static irqreturn_t lpc32xx_usb_hp_irq(int irq, void *_udc)
 
 	/* All other EPs */
 	if (tmp & ~(EP_MASK_SEL(0, EP_OUT) | EP_MASK_SEL(0, EP_IN))) {
-#if defined(UDC_ENABLE_DMA)
-		udc_handle_eps(udc, tmp);
-
-#else
 		int i;
 
 		/* Handle other EP interrupts */
 		for (i = 1; i < NUM_ENDPOINTS; i++) {
 			if (tmp & (1 << udc->ep [i].hwep_num))
+#if defined(UDC_ENABLE_DMA)
+				udc_handle_eps(udc, &udc->ep[i]);
+#else
 				udc_handle_ep(udc, &udc->ep[i]);
-		}
 #endif
+		}
 	}
 
 	spin_unlock(&udc->lock);
