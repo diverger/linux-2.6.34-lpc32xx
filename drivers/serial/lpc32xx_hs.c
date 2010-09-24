@@ -97,7 +97,7 @@ struct lpc32xx_hsuart_port {
 #define LPC32XX_TTY_MAJOR 204
 static struct lpc32xx_hsuart_port lpc32xx_hs_ports[MAX_PORTS];
 
-#ifdef SERIAL_HS_LPC32XX_CONSOLE
+#ifdef CONFIG_SERIAL_HS_LPC32XX_CONSOLE
 static void wait_for_xmit_empty(struct uart_port *port)
 {
 	unsigned int timeout = 10000;

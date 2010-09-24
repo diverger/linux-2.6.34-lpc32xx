@@ -16,6 +16,11 @@ choice
         help
             Support for the Embedded Artists LPC3250 Developer's Kit
 
+    config MACH_FDI3250
+        bool "Future Designs LPC3250 Touch screen kit"
+        help
+            Support for the Future Designs LPC3250 Touch screen kit
+
 endchoice
 
 menu "Embedded Artists Display Selection"
@@ -32,6 +37,33 @@ config EA3250_QVGA_2_8_OLED
 	  Use 2.8 inch QVGA OLED display
 
 endmenu
+
+
+config SOM9DIMM3250_LCD_PANEL
+	bool "Enables support for SOM9DIMM-LPC3250 (FDI board) LCDs"
+	depends on MACH_FDI3250
+	default TRUE
+	help
+	  Say Y here to enable QVGA/VGA panel support
+	  
+choice
+    prompt "FDI LCD Display"
+    depends on SOM9DIMM3250_LCD_PANEL
+    default SOM9DIMM3250_LCD_OKAYA_VGA
+    help
+        Select type of LCD display to be used.
+
+config SOM9DIMM3250_LCD_OKAYA_VGA_35
+    bool "OKAYA VGA LCD on 3-5 LCD CARRIER board"
+    help
+      Select this option if you are using an OKAYA RV640480T on a FDI 3-5 LCD CARRIER board
+      
+config SOM9DIMM3250_LCD_TOSHIBA_QVGA_35
+    bool "Toshiba QVGA LCD on 3-5 LCD CARRIER board"
+    help
+      Select this option if you are using a Toshiba LTA057A347F on a FDI 3-5 LCD CARRIER board
+
+endchoice
 
 menu "Standard UARTS"
 

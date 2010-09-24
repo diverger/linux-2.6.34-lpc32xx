@@ -24,6 +24,28 @@
 #include <mach/hardware.h>
 #include <mach/platform.h>
 
+#if defined(CONFIG_SERIAL_HS_LPC32XX_CONSOLE)
+
+#define HSUART_FIFO     (*(volatile unsigned char *)(LPC32XX_HS_UART1_BASE + 0x00))
+#define HSUART_LEVEL    (*(volatile unsigned short *)(LPC32XX_HS_UART1_BASE + 0x04))
+
+static inline void putc(int ch)
+{
+    /* Wait for transmit FIFO to empty */
+    while ((HSUART_LEVEL & 0xFF00) != 0);
+    HSUART_FIFO = ch;
+}
+
+static inline void flush(void)
+{
+
+    /* Don't see a reset? */
+
+    /* Then just wait for transmition to complete */
+    while ((HSUART_LEVEL & 0xFF00) != 0);
+}
+
+#else
 /*
  * Uncompress output is hardcoded to standard UART 5
  */
@@ -52,6 +74,7 @@ static inline void flush(void)
 	__raw_writel(__raw_readl(_UARTREG(LPC32XX_UART_IIRFCR_O)) |
 		UART_FIFO_CTL_TX_RESET, _UARTREG(LPC32XX_UART_IIRFCR_O));
 }
+#endif
 
 /* NULL functions; we don't presently need them */
 #define arch_decomp_setup()
