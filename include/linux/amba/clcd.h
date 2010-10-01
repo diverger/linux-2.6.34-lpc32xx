@@ -257,7 +257,7 @@ static inline int clcdfb_check(struct clcd_fb *fb, struct fb_var_screeninfo *var
 	    var->xres > 1024 ||
 	    var->lower_margin > 255 ||		/* back porch */
 	    var->upper_margin > 255 ||		/* front porch */
-	    var->vsync_len > 32 ||
+	    var->vsync_len > 64 ||
 	    var->yres > 1024)
 		return -EINVAL;
 #undef CHECK
