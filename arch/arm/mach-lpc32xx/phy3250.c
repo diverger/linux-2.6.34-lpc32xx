@@ -388,7 +388,7 @@ static int nandwp_enable(int enable)
 {
         if (enable != 0)
 		gpio_set_value(NAND_WP_GPIO,0);
-        else 
+        else
 		gpio_set_value(NAND_WP_GPIO,1);
 
         return 1;
@@ -426,7 +426,7 @@ static struct mtd_partition * __init phy3250_nand_partitions(int size, int *num_
         *num_partitions = ARRAY_SIZE(phy3250_nand_partition);
         return phy3250_nand_partition;
 }
-struct lpc32XX_nand_cfg lpc32xx_nandcfg =
+struct lpc32XX_nand_cfg __initdata lpc32xx_nandcfg =
 {
         .wdr_clks               = 3,
         .wwidth                 = 28571428,
@@ -459,7 +459,7 @@ static struct resource slc_nand_resources[] = {
 
 };
 static u64 lpc32xx_slc_dma_mask = 0xffffffffUL;
-static struct platform_device lpc32xx_slc_nand_device = {
+static struct platform_device __initdata lpc32xx_slc_nand_device = {
         .name           = "lpc32xx-nand",
         .id             = 0,
         .dev            = {
@@ -657,7 +657,7 @@ arch_initcall(lpc32xx_display_uid);
  * although they will be registered in the event manager. For this,
  * reason, a level based interrupt state is recommended for GPIOs when
  * using IRQ and wakeup from GPI edge state.
- * 
+ *
  */
 #define BTN1_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 3)
 static irqreturn_t phy3250_btn1_irq(int irq, void *dev)

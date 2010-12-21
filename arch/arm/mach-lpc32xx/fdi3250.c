@@ -329,12 +329,12 @@ static struct mtd_partition __initdata fdi3250_nand_partition[] = {
         {
                 .name   = "fdi3250-boot",
                 .offset = 0,
-                .size   = (BLK_SIZE * 25)
+                .size   = (BLK_SIZE * 4)
         },
         {
                 .name   = "fdi3250-uboot",
                 .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 102)
+                .size   = (BLK_SIZE * 6)
         },
         {
                 .name   = "fdi3250-kernel",

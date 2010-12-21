@@ -31,6 +31,7 @@
 #include <linux/amba/clcd.h>
 #include <linux/amba/pl022.h>
 #include <linux/amba/mmci.h>
+#include <mtd/mtd-abi.h>
 
 #include <asm/setup.h>
 #include <asm/mach-types.h>
@@ -602,7 +603,7 @@ static int __init ea3250_amba_devices_register(void)
 		struct amba_device *d = amba_devs[i];
 		amba_device_register(d, &iomem_resource);
 	}
-	
+
 	return 0;
 }
 device_initcall_sync(ea3250_amba_devices_register);
@@ -625,17 +626,13 @@ static struct mtd_partition __initdata ea3250_nand_partition[] = {
         {
                 .name   = "ea3250-boot",
                 .offset = 0,
-                .size   = (BLK_SIZE * 25)
+                .size   = (BLK_SIZE * 4),
+		.mask_flags   = MTD_WRITEABLE,
         },
         {
                 .name   = "ea3250-uboot",
                 .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 100)
-        },
-        {
-                .name   = "ea3250-ubt-prms",
-                .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 2)
+                .size   = (BLK_SIZE * 6)
         },
         {
                 .name   = "ea3250-kernel",
@@ -653,7 +650,7 @@ static struct mtd_partition * __init ea3250_nand_partitions(int size, int *num_p
         *num_partitions = ARRAY_SIZE(ea3250_nand_partition);
         return ea3250_nand_partition;
 }
-struct lpc32XX_nand_cfg lpc32xx_nandcfg =
+struct lpc32XX_nand_cfg __initdata lpc32xx_nandcfg =
 {
         .wdr_clks               = 14,
         .wwidth                 = 260000000,
@@ -687,7 +684,7 @@ static struct resource slc_nand_resources[] = {
 };
 
 static u64 lpc32xx_slc_dma_mask = 0xffffffffUL;
-static struct platform_device lpc32xx_slc_nand_device = {
+static struct platform_device __initdata lpc32xx_slc_nand_device = {
         .name           = "lpc32xx-nand",
         .id             = 0,
         .dev            = {
@@ -858,7 +855,7 @@ void __init ea3250_board_init(void)
 
 	/* Register SPI driver */
 	ea3250_spi_lcdc_drv_init();
-	
+
 	/* Test clock needed for UDA1380 initial init */
 	__raw_writel(LPC32XX_CLKPWR_TESTCLK2_SEL_MOSC |
 			LPC32XX_CLKPWR_TESTCLK_TESTCLK2_EN,
