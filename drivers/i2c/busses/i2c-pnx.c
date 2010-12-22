@@ -305,10 +305,151 @@ static int i2c_pnx_master_rcv(struct i2c_pnx_algo_data *alg_data)
 	return 0;
 }
 
+/* SMBus receive handler, called from ISR */
+static int i2c_pnx_smbus_rx(struct i2c_pnx_algo_data *smbus)
+{
+	struct i2c_pnx_smbus *smb = &smbus->smb;
+	while (!(ioread32(I2C_REG_STS(smbus)) & mstatus_rfe)) {
+		smb->rx_buf[smb->rx_cnt++] =
+			(u8) ioread32(I2C_REG_RX(smbus));
+		dev_dbg(&smbus->adapter.dev, "Rx Char: %02x\n",
+				smb->rx_buf[smb->rx_cnt - 1]);
+
+		/* If Rx char is not length then continue receiving */
+		if ((smb->rx_cnt != 1) ||
+			!(smb->flags & I2C_PNX_SMBUS_BLOCK_RX))
+			continue;
+
+		/* If Received char is length, check for validity */
+		if (unlikely(smb->rx_buf[0] <= 0 &&
+			smb->rx_buf[0] > smb->max_rx_len)) {
+			dev_dbg(&smbus->adapter.dev, "ERR: SMBus received "
+					"invalid transfer length %d from slave"
+					" %#02x during a block transfer.\n",
+					smb->rx_buf[0],
+					smb->slave_addr);
+			smb->ret = -EIO;
+			complete(&smb->complete);
+			smb->flags |= I2C_PNX_SMBUS_NEED_RESET;
+			return 1;
+		}
+
+		/* There is a hardware BUG, that makes receiving
+		 * only length not possible, so we receive length
+		 * and a byte of data, if that is the only byte to
+		 * be received the the transfer must stop right away
+		 **/
+		if (smb->rx_buf[0] == 1) {
+			/* Stop xfer right away */
+			iowrite32(stop_bit, I2C_REG_TX(smbus));
+			iowrite32(ioread32(I2C_REG_CTL(smbus)) &
+					~(mcntrl_drmie | mcntrl_tffie),
+					I2C_REG_CTL(smbus));
+			return 1;
+		}
+
+		dev_dbg(&smbus->adapter.dev, "Set Len:%d\n",
+				smb->rx_buf[0]);
+		smb->len += smb->rx_buf[0] - 1;
+		smb->tx_buf[smb->len - 1] |= stop_bit;
+		iowrite32(ioread32(I2C_REG_CTL(smbus)) |
+				  mcntrl_tffie, I2C_REG_CTL(smbus));
+	}
+	return 0;
+}
+
+/* SMBUs interrupt handler */
+static irqreturn_t i2c_pnx_smbus_isr(int irq, void *dev_id)
+{
+	struct i2c_pnx_algo_data *smbus = dev_id;
+	struct i2c_pnx_smbus *smb = &smbus->smb;
+	u32 stat, ctl;
+	stat = ioread32(I2C_REG_STS(smbus));
+	ctl = ioread32(I2C_REG_CTL(smbus));
+
+	dev_dbg(&smbus->adapter.dev, "ISR: stat = %#08x, "
+			"ctrl = %#08x\r\n", stat, ctl);
+
+	/* Handle Rx data */
+	if (((stat & mstatus_rff) && (ctl & mcntrl_rffie)) ||
+	    (!(stat & mstatus_rfe) && (ctl & mcntrl_daie))) {
+		if (i2c_pnx_smbus_rx(smbus))
+			return IRQ_HANDLED;
+		stat = ioread32(I2C_REG_STS(smbus));
+		ctl = ioread32(I2C_REG_CTL(smbus));
+	}
+
+	/* Handle Transmit */
+	if (((stat & mstatus_drmi) && (ctl & mcntrl_drmie)) ||
+	    (!(stat & mstatus_rff) && (ctl & mcntrl_tffie))) {
+
+		/* Push data into FIFO until we run out of data
+		 * or TX/RX fifo is full
+		 **/
+		for (; (smb->index < smb->len) &&
+		     !(ioread32(I2C_REG_STS(smbus)) &
+				 (mstatus_tff | mstatus_rff));
+		     smb->index++) {
+			iowrite32(smb->tx_buf[smb->index], I2C_REG_TX(smbus));
+			dev_dbg(&smbus->adapter.dev, "Tx Char: %03x\n",
+					smb->tx_buf[smb->index]);
+		}
+
+		/* Stop further transmit if we run out of data */
+		if (smb->index >= smb->len) {
+			iowrite32(ctl & ~(mcntrl_drmie | mcntrl_tffie),
+					I2C_REG_CTL(smbus));
+		}
+		return IRQ_HANDLED;
+	}
+
+	/* Handle Arbitration loss */
+	if (unlikely((stat & mstatus_afi) && (ctl & mcntrl_afie))) {
+		dev_dbg(&smbus->adapter.dev, "Aribitration lost during"
+				" transfer to/from slave addr %02x\r\n",
+				smb->slave_addr);
+		smb->ret = -EAGAIN;
+		complete(&smb->complete);
+		smb->flags |= I2C_PNX_SMBUS_NEED_RESET;
+		/* We are done! */
+		iowrite32(0, I2C_REG_CTL(smbus));
+		return IRQ_HANDLED;
+	}
+
+	/* Handle NACK reception */
+	if (unlikely((stat & mstatus_nai) && (ctl & mcntrl_naie))) {
+		dev_dbg(&smbus->adapter.dev, "Nack received!\n");
+		smb->ret = -EIO;
+		complete(&smb->complete);
+		smb->flags |= I2C_PNX_SMBUS_NEED_RESET;
+		/* We are done! */
+		iowrite32(0, I2C_REG_CTL(smbus));
+		return IRQ_HANDLED;
+	}
+
+	/* Handle Xfer Done */
+	if ((stat & mstatus_tdi) &&
+	    (mcntrl_tdie & ctl)) {
+		dev_dbg(&smbus->adapter.dev, "SMBus Xfer Done!\r\n");
+		/* Transmission is done */
+		smb->ret = 0;
+		complete(&smb->complete);
+		iowrite32(mstatus_tdi, I2C_REG_STS(smbus));
+		iowrite32(0, I2C_REG_CTL(smbus));
+		return IRQ_HANDLED;
+	}
+
+	return IRQ_HANDLED;
+}
+
 static irqreturn_t i2c_pnx_interrupt(int irq, void *dev_id)
 {
 	struct i2c_pnx_algo_data *alg_data = dev_id;
 	u32 stat, ctl;
+
+	/* If it is an SMBUS xfer let another handler do the task */
+	if (alg_data->smb.flags & I2C_PNX_SMBUS_ACTIVE)
+		return i2c_pnx_smbus_isr(irq, dev_id);
 
 	dev_dbg(&alg_data->adapter.dev,
 		"%s(): mstat = %x mctrl = %x, mode = %d\n",
@@ -430,7 +571,7 @@ static inline void bus_reset_if_active(struct i2c_pnx_algo_data *alg_data)
 }
 
 /**
- * i2c_pnx_xfer - generic transfer entry point
+ * i2c_pnx_xfer - I2C Protocol Transfer routine
  * @adap:		pointer to I2C adapter structure
  * @msgs:		array of messages
  * @num:		number of messages
@@ -530,13 +671,254 @@ i2c_pnx_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 	return num;
 }
 
-static u32 i2c_pnx_func(struct i2c_adapter *adapter)
+/* Checks for the state of I2C BUS */
+static int i2c_pnx_smbus_check(struct i2c_pnx_algo_data *smbus)
 {
-	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
+	u32 stat;
+	int need_reset;
+
+	stat = ioread32(I2C_REG_STS(smbus));
+
+	/* Reset if bus is still active or a NACK from prev xfer pending */
+	need_reset = stat & (mstatus_active | mstatus_nai);
+
+	/* Reset if TXFIFO or RXFIFO is not empty */
+	need_reset |= ~stat & (mstatus_rfe | mstatus_tfe);
+
+	if (unlikely(need_reset)) {
+		dev_dbg(&smbus->adapter.dev, "SMBus is not in idle state"
+				" before transfer, resetting it...\r\n");
+		iowrite32(ioread32(I2C_REG_CTL(smbus)) | mcntrl_reset,
+			  I2C_REG_CTL(smbus));
+		wait_reset(I2C_PNX_TIMEOUT, smbus);
+	}
+
+	stat = ioread32(I2C_REG_STS(smbus));
+
+	/* if the bus is still busy ask i2c-core to retry after sometime */
+	if (stat & mstatus_active) {
+		dev_dbg(&smbus->adapter.dev, "SMBus is still active!\r\n");
+		return -EAGAIN;
+	}
+
+	return 0;
 }
 
-static struct i2c_algorithm pnx_algorithm = {
+/* Initialize SMBus structure */
+static void i2c_pnx_smbus_init(struct i2c_pnx_algo_data *smbus)
+{
+	struct i2c_pnx_smbus *smb = &smbus->smb;
+	smb->index = 0;
+	smb->ret = 0;
+	smb->flags = I2C_PNX_SMBUS_ACTIVE;
+	smb->len = 0;
+	smb->rx_cnt = 0;
+	iowrite32(mstatus_tdi, I2C_REG_STS(smbus));
+	init_completion(&smb->complete);
+}
+
+static void i2c_pnx_fill_buffer(u16 *to, u8 *from, int cnt)
+{
+	int i;
+	for (i = 0; i < cnt; i++)
+		to[i] = from ? from[i] : 0;
+}
+
+/**
+ * i2c_pnx_smbus_xfer - SMBUS protocol transfer routine
+ * @adapter:	pointer to I2C adapter structure
+ * @msgs:		array of messages
+ * @num:		number of messages
+ *
+ * Initiates the transfer
+ */
+static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
+		u16 addr, unsigned short flags, char read_write, u8 command,
+		int size, union i2c_smbus_data *data)
+{
+	struct i2c_pnx_algo_data *smbus = adapter->algo_data;
+	struct i2c_pnx_smbus *smb = &smbus->smb;
+	u16 *tx_buf = smb->tx_buf;
+	int read_flag, err;
+	int len = 0, i = 0;
+
+	dev_dbg(&adapter->dev, "SMBus xfer request: Slave addr %#02x,"
+			"command=%d, operation=%d\r\n", addr, command, size);
+
+	smb->slave_addr = addr;
+	/* All our ops take 8-bit shifted addresses */
+	addr <<= 1;
+	read_flag = read_write == I2C_SMBUS_READ;
+
+	err = i2c_pnx_smbus_check(smbus);
+	if (unlikely(err))
+		return err;
+
+	i2c_pnx_smbus_init(smbus);
+
+	smb->rx_buf = data->block;
+	switch (size) {
+	case I2C_SMBUS_QUICK:
+		tx_buf[0] = addr | start_bit | stop_bit | read_flag;
+		read_flag = 0;
+		smb->len = 1;
+		break;
+
+	case I2C_SMBUS_BYTE:
+		tx_buf[0] = addr | start_bit | read_flag;
+		tx_buf[1] = command | stop_bit;
+		smb->len = 2;
+		break;
+
+	case I2C_SMBUS_BYTE_DATA:
+		i = 0;
+		tx_buf[i++] = addr | start_bit;
+		tx_buf[i++] = command;
+		if (read_flag)
+			tx_buf[i++] = addr | start_bit | 1;
+		tx_buf[i++] = data->byte | stop_bit;
+		smb->len = i;
+		break;
+
+	case I2C_SMBUS_WORD_DATA:
+		i = 0;
+		tx_buf[i++] = addr | start_bit;
+		tx_buf[i++] = command;
+		if (read_flag)
+			tx_buf[i++] = addr | start_bit | 1;
+		tx_buf[i++] = (data->word & 0xFF); /* Low Word */
+		tx_buf[i++] = ((data->word >> 8) & 0xFF) | stop_bit;
+		smb->len = i;
+		smb->flags |= I2C_PNX_SMBUS_WORD_RX;
+		break;
+
+	case I2C_SMBUS_BLOCK_DATA:
+		len = data->block[0];
+		tx_buf[i++] = addr | start_bit;
+		tx_buf[i++] = command;
+		if (read_flag) {
+			tx_buf[i++] = addr | start_bit | 1;
+			i2c_pnx_fill_buffer(&tx_buf[i],
+					(u8 *)NULL, I2C_SMBUS_BLOCK_MAX + 1);
+			tx_buf[I2C_SMBUS_BLOCK_MAX + i] |= stop_bit;
+			smb->rx_buf = data->block;
+			smb->flags |= I2C_PNX_SMBUS_BLOCK_RX;
+			smb->len = i + 2;
+			smb->max_rx_len = I2C_SMBUS_BLOCK_MAX;
+		} else {
+			if (!len)
+				return -EIO;
+			i2c_pnx_fill_buffer(&tx_buf[i],
+			    data->block, len + 1);
+			tx_buf[len + i] |= stop_bit;
+			smb->len = len + i + 1;
+		}
+		break;
+
+	case I2C_SMBUS_PROC_CALL:
+		tx_buf[0] = addr | start_bit;
+		tx_buf[1] = command;
+		tx_buf[2] = data->word & 0xFF;
+		tx_buf[3] = (data->word >> 8) & 0xFF;
+		tx_buf[4] = addr | start_bit | 1;
+		tx_buf[5] = 0;
+		tx_buf[6] = 0 | stop_bit;
+		smb->len = 7;
+		smb->max_rx_len = 2;
+		smb->flags |= I2C_PNX_SMBUS_WORD_RX;
+		read_flag = 1;
+		break;
+
+	case I2C_SMBUS_BLOCK_PROC_CALL:
+		len = data->block[0];
+		if (!len)
+			return -EINVAL;
+		tx_buf[0] = addr | start_bit;
+		tx_buf[1] = command;
+		i2c_pnx_fill_buffer(&tx_buf[2],
+			data->block, len + 1);
+		i = 3 + len;
+		tx_buf[i++] = addr | start_bit | 1;
+		len = I2C_SMBUS_BLOCK_MAX - len;
+		i2c_pnx_fill_buffer(&tx_buf[i],
+		    NULL, len + 1);
+		tx_buf[i+len] = stop_bit;
+		smb->flags |= I2C_PNX_SMBUS_BLOCK_RX;
+		smb->max_rx_len = len;
+		smb->len = 2 + i;
+		read_flag = 1;
+		break;
+
+	default:
+		dev_warn(&adapter->dev, "Unsupported transaction %d\n", size);
+		return -EINVAL;
+	}
+	/* Enable interrupts and wait for completion of xfer */
+	iowrite32(ioread32(I2C_REG_CTL(smbus)) | 0xEF, I2C_REG_CTL(smbus));
+
+	err = wait_for_completion_interruptible_timeout(&smb->complete, HZ);
+
+	/* Disable interrupts */
+	iowrite32(ioread32(I2C_REG_CTL(smbus)) & ~0xEF, I2C_REG_CTL(smbus));
+	smb->flags &= ~I2C_PNX_SMBUS_ACTIVE;
+
+	if (err == 0) { /* Xfer timedout */
+		dev_dbg(&adapter->dev, "SMBus Xfer timedout"
+				"[Slave Addr: %02x]\n", addr >> 1);
+		err = -ETIMEDOUT;
+		smb->flags |= I2C_PNX_SMBUS_NEED_RESET;
+	} else if (err > 0) { /* No error */
+		err = smb->ret;
+	} else { /* < 0 Possibly interrupted */
+		smb->flags |= I2C_PNX_SMBUS_NEED_RESET;
+	}
+
+	/* Handle post processing for a Rx xfer */
+	if (!err && read_flag) {
+		len = (smb->flags & I2C_PNX_SMBUS_BLOCK_RX) ?
+			data->block[0] + 1 : 1;
+
+		if (smb->flags & I2C_PNX_SMBUS_WORD_RX) {
+			len = 2;
+			/* Return endian independent data */
+			data->word = (data->block[0] & 0xFF) |
+				((data->block[1] & 0xFF) << 8);
+		}
+		if (unlikely(len > smb->rx_cnt)) {
+			dev_err(&adapter->dev, "SMBus: Rx count error "
+					"[Expected:%d, Got:%d] slave: %#02x\n",
+					len, smb->rx_cnt, addr >> 1);
+			err = -EIO;
+		}
+	}
+
+	if (unlikely(smb->flags & I2C_PNX_SMBUS_NEED_RESET)) {
+		iowrite32(ioread32(I2C_REG_CTL(smbus)) | mcntrl_reset,
+			  I2C_REG_CTL(smbus));
+	}
+	return err;
+}
+
+/**
+ * i2c_pnx_func - SMBUS protocol transfer routine
+ * @adapt:	pointer to I2C adapter structure
+ *
+ * Provides the list of functionality provided by pnx-i2c
+ *
+ * I2C_FUNC_10BIT_ADDR - is supported by hardware but
+ * this driver does not implement it!
+ */
+static u32 i2c_pnx_func(struct i2c_adapter *adap)
+{
+	return I2C_FUNC_SMBUS_QUICK | I2C_FUNC_SMBUS_BYTE |
+	       I2C_FUNC_SMBUS_BYTE_DATA | I2C_FUNC_SMBUS_WORD_DATA |
+	       I2C_FUNC_SMBUS_BLOCK_DATA | I2C_FUNC_SMBUS_PROC_CALL |
+	       I2C_FUNC_SMBUS_BLOCK_PROC_CALL | I2C_FUNC_I2C;
+}
+
+static const struct i2c_algorithm pnx_algorithm = {
 	.master_xfer = i2c_pnx_xfer,
+	.smbus_xfer  = i2c_pnx_smbus_xfer,
 	.functionality = i2c_pnx_func,
 };
 
