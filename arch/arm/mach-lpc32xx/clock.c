@@ -99,11 +99,12 @@
 #include "clock.h"
 #include "common.h"
 
+static DEFINE_SPINLOCK(global_clkregs_lock);
+
 static int usb_pll_enable, usb_pll_valid;
 
 static struct clk clk_armpll;
 static struct clk clk_usbpll;
-static DEFINE_MUTEX(clkm_lock);
 
 /*
  * Post divider values for PLLs based on selected register value
@@ -936,16 +937,6 @@ static struct clk clk_lcd = {
 	.enable_mask	= LPC32XX_CLKPWR_LCDCTRL_CLK_EN,
 };
 
-static inline void clk_lock(void)
-{
-	mutex_lock(&clkm_lock);
-}
-
-static inline void clk_unlock(void)
-{
-	mutex_unlock(&clkm_lock);
-}
-
 static void local_clk_disable(struct clk *clk)
 {
 	// WARN_ON(clk->usecount == 0);
@@ -992,10 +983,11 @@ static int local_clk_enable(struct clk *clk)
 int clk_enable(struct clk *clk)
 {
 	int ret;
+	unsigned long flags;
 
-	clk_lock();
+	spin_lock_irqsave(&global_clkregs_lock, flags);
 	ret = local_clk_enable(clk);
-	clk_unlock();
+	spin_unlock_irqrestore(&global_clkregs_lock, flags);
 
 	return ret;
 }
@@ -1006,9 +998,11 @@ EXPORT_SYMBOL(clk_enable);
  */
 void clk_disable(struct clk *clk)
 {
-	clk_lock();
+	unsigned long flags;
+
+	spin_lock_irqsave(&global_clkregs_lock, flags);
 	local_clk_disable(clk);
-	clk_unlock();
+	spin_unlock_irqrestore(&global_clkregs_lock, flags);
 }
 EXPORT_SYMBOL(clk_disable);
 
@@ -1017,13 +1011,7 @@ EXPORT_SYMBOL(clk_disable);
  */
 unsigned long clk_get_rate(struct clk *clk)
 {
-	unsigned long rate;
-
-	clk_lock();
-	rate = clk->get_rate(clk);
-	clk_unlock();
-
-	return rate;
+	return clk->get_rate(clk);
 }
 EXPORT_SYMBOL(clk_get_rate);
 
@@ -1039,11 +1027,8 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
 	 * the actual rate set as part of the peripheral dividers
 	 * instead of high level clock control
 	 */
-	if (clk->set_rate) {
-		clk_lock();
+	if (clk->set_rate)
 		ret = clk->set_rate(clk, rate);
-		clk_unlock();
-	}
 
 	return ret;
 }
@@ -1054,14 +1039,10 @@ EXPORT_SYMBOL(clk_set_rate);
  */
 long clk_round_rate(struct clk *clk, unsigned long rate)
 {
-	clk_lock();
-
 	if (clk->round_rate)
 		rate = clk->round_rate(clk, rate);
 	else
 		rate = clk->get_rate(clk);
-
-	clk_unlock();
 
 	return rate;
 }
