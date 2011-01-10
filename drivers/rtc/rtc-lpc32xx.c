@@ -202,7 +202,7 @@ static int __devinit lpc32xx_rtc_probe(struct platform_device *pdev)
 	struct lpc32xx_rtc *rtc;
 	resource_size_t size;
 	int rtcirq;
-	u32 tmp;
+	u32 tmp, ucount, dcount;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -271,6 +271,24 @@ static int __devinit lpc32xx_rtc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, rtc);
+
+	/*
+	* Check SRAM integrity by comparing UP and DOWN counters
+	* If they don't match, reset them.
+	*/
+
+	/* Disable RTC during read (preventing count between reads) */
+	tmp = rtc_readl(rtc, LPC32XX_RTC_CTRL);
+	rtc_writel(rtc, LPC32XX_RTC_CTRL, tmp | LPC32XX_RTC_CTRL_CNTR_DIS);
+	ucount = rtc_readl(rtc, LPC32XX_RTC_UCOUNT);
+	dcount = rtc_readl(rtc, LPC32XX_RTC_DCOUNT);
+	rtc_writel(rtc, LPC32XX_RTC_CTRL, tmp &= ~LPC32XX_RTC_CTRL_CNTR_DIS);
+
+	if( (dcount + ucount) != 0xFFFFFFFF )
+	{
+		dev_dbg(&pdev->dev, "Dcount (%08X) and Ucount (%08X) mismatch, reset them.\n", dcount, ucount );
+		lpc32xx_rtc_set_mmss(&pdev->dev, 0);
+	}
 
 	rtc->rtc = rtc_device_register(RTC_NAME, &pdev->dev, &lpc32xx_rtc_ops,
 		THIS_MODULE);
