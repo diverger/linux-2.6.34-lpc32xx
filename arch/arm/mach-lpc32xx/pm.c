@@ -134,7 +134,7 @@ static struct platform_suspend_ops lpc32xx_pm_ops = {
 static int __init lpc32xx_pm_init(void)
 {
 	/*
-	 * Setup SDRAM self-refresh clock to automatically disable o
+	 * Setup SDRAM self-refresh clock to automatically disable on
 	 * start of self-refresh. This only needs to be done once.
 	 */
 	__raw_writel(__raw_readl(EMC_CTRL_REG) | EMC_SRMMC, EMC_CTRL_REG);
