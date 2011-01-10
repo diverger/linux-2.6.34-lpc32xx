@@ -394,7 +394,7 @@ static int nandwp_enable(int enable)
         return 1;
 }
 #define BLK_SIZE (512 * 32)
-static struct mtd_partition __initdata phy3250_nand_partition[] = {
+static struct mtd_partition phy3250_nand_partition[] = {
         {
                 .name   = "phy3250-boot",
                 .offset = 0,
@@ -421,12 +421,12 @@ static struct mtd_partition __initdata phy3250_nand_partition[] = {
                 .size   = MTDPART_SIZ_FULL
         },
 };
-static struct mtd_partition * __init phy3250_nand_partitions(int size, int *num_partitions)
+static struct mtd_partition * phy3250_nand_partitions(int size, int *num_partitions)
 {
         *num_partitions = ARRAY_SIZE(phy3250_nand_partition);
         return phy3250_nand_partition;
 }
-struct lpc32XX_nand_cfg __initdata lpc32xx_nandcfg =
+struct lpc32XX_nand_cfg lpc32xx_nandcfg =
 {
         .wdr_clks               = 3,
         .wwidth                 = 28571428,
@@ -459,7 +459,7 @@ static struct resource slc_nand_resources[] = {
 
 };
 static u64 lpc32xx_slc_dma_mask = 0xffffffffUL;
-static struct platform_device __initdata lpc32xx_slc_nand_device = {
+static struct platform_device lpc32xx_slc_nand_device = {
         .name           = "lpc32xx-nand",
         .id             = 0,
         .dev            = {

@@ -325,7 +325,7 @@ static int nandwp_enable(int enable)
         return 1;
 }
 #define BLK_SIZE (2048 * 64)
-static struct mtd_partition __initdata fdi3250_nand_partition[] = {
+static struct mtd_partition fdi3250_nand_partition[] = {
         {
                 .name   = "fdi3250-boot",
                 .offset = 0,
@@ -347,7 +347,7 @@ static struct mtd_partition __initdata fdi3250_nand_partition[] = {
                 .size   = MTDPART_SIZ_FULL
         },
 };
-static struct mtd_partition * __init fdi3250_nand_partitions(int size, int *num_partitions)
+static struct mtd_partition * fdi3250_nand_partitions(int size, int *num_partitions)
 {
         *num_partitions = ARRAY_SIZE(fdi3250_nand_partition);
         return fdi3250_nand_partition;
