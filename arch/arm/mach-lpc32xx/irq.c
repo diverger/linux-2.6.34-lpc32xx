@@ -22,6 +22,7 @@
 #include <linux/irq.h>
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/kobject.h>
 
 #include <mach/irqs.h>
 #include <mach/hardware.h>
@@ -72,6 +73,8 @@ struct lpc32xx_event_info {
 
 /*
  * Maps an IRQ number to and event mask and register
+ * All IRQs are event based wakeup IRQs except the UARTs. The UART RX
+ * wakeup is based on the pin state, not the UART IRQ state.
  */
 static const struct lpc32xx_event_info lpc32xx_events[NR_IRQS] = {
 	[IRQ_LPC32XX_GPI_08] = {
@@ -118,6 +121,10 @@ static const struct lpc32xx_event_info lpc32xx_events[NR_IRQS] = {
 		.event_group = &lpc32xx_event_pin_regs,
 		.mask = LPC32XX_CLKPWR_EXTSRC_GPI_06_BIT,
 	},
+	[IRQ_LPC32XX_GPI_28] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_GPI_28_BIT,
+	},
 	[IRQ_LPC32XX_GPIO_00] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_GPIO_00_BIT,
@@ -146,6 +153,10 @@ static const struct lpc32xx_event_info lpc32xx_events[NR_IRQS] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_KEY_BIT,
 	},
+        [IRQ_LPC32XX_ETHERNET] = {
+                .event_group = &lpc32xx_event_int_regs,
+                .mask = LPC32XX_CLKPWR_INTSRC_MAC_BIT,
+        },
 	[IRQ_LPC32XX_USB_OTG_ATX] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_USBATXINT_BIT,
@@ -302,8 +313,17 @@ static int lpc32xx_irq_wake(unsigned int irqno, unsigned int state)
 
 		if (state)
 			eventreg |= lpc32xx_events[irqno].mask;
-		else
+		else {
 			eventreg &= ~lpc32xx_events[irqno].mask;
+
+			/*
+			 * When disabling the wakeup, clear the latched
+			 * event
+			 */
+			__raw_writel(lpc32xx_events[irqno].mask,
+				lpc32xx_events[irqno].
+				event_group->rawstat_reg);
+		}
 
 		__raw_writel(eventreg,
 			lpc32xx_events[irqno].event_group->enab_reg);

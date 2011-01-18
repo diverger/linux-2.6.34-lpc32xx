@@ -64,9 +64,11 @@
  *  Suspend mode is exited
  */
 
+#include <linux/pm.h>
 #include <linux/suspend.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
 
 #include <asm/cacheflush.h>
 
@@ -79,12 +81,8 @@
 static void *iram_swap_area;
 static int (*lpc32xx_suspend_ptr) (void);
 
-/*
- * Both STANDBY and MEM suspend states are handled the same with no
- * loss of CPU or memory state
- */
-static int lpc32xx_pm_enter(suspend_state_t state)
-{
+static inline int lpc32xx_suspend(void)
+ {
 	/* Backup a small area of IRAM used for the suspend code */
 	memcpy(iram_swap_area, (void *) TEMP_IRAM_AREA,
 		lpc32xx_sys_suspend_sz);
@@ -110,8 +108,32 @@ static int lpc32xx_pm_enter(suspend_state_t state)
 	return 0;
 }
 
+static int lpc32xx_pm_enter(suspend_state_t state)
+{
+	int ret = 0;
+
+	switch (state)
+	{
+		case PM_SUSPEND_STANDBY:
+			asm("mcr p15, 0, r0, c7, c0, 4");
+			break;
+		case PM_SUSPEND_MEM:
+			ret = lpc32xx_suspend();
+			break;
+	}
+
+	return ret;
+}
+
+static int lpc32xx_pm_valid(suspend_state_t state)
+{
+	return (state == PM_SUSPEND_STANDBY) ||
+	       (state == PM_SUSPEND_MEM);
+}
+
+
 static struct platform_suspend_ops lpc32xx_pm_ops = {
-	.valid	= suspend_valid_only_mem,
+	.valid	= lpc32xx_pm_valid,
 	.enter	= lpc32xx_pm_enter,
 };
 
@@ -136,7 +158,6 @@ static int __init lpc32xx_pm_init(void)
 	}
 
 	lpc32xx_suspend_ptr = (void *) TEMP_IRAM_AREA;
-
 	suspend_set_ops(&lpc32xx_pm_ops);
 
 	return 0;

@@ -521,6 +521,27 @@ static int clcdfb_remove(struct amba_device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int clcdfb_suspend(struct amba_device *dev, pm_message_t msg)
+{
+	struct clcd_fb *fb = amba_get_drvdata(dev);
+	
+	clcdfb_disable(fb);
+	return 0;
+}
+
+static int clcdfb_resume(struct amba_device *dev)
+{
+	struct clcd_fb *fb = amba_get_drvdata(dev);
+	
+	clcdfb_enable(fb, fb->clcd_cntl);
+	return 0;
+}
+#else
+#define clcdfb_suspend	NULL
+#define clcdfb_resume	NULL
+#endif 
+
 static struct amba_id clcdfb_id_table[] = {
 	{
 		.id	= 0x00041110,
@@ -535,6 +556,8 @@ static struct amba_driver clcd_driver = {
 	},
 	.probe		= clcdfb_probe,
 	.remove		= clcdfb_remove,
+	.suspend	= clcdfb_suspend,
+	.resume		= clcdfb_resume,
 	.id_table	= clcdfb_id_table,
 };
 

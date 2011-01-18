@@ -1211,6 +1211,9 @@ static int lpc_net_drv_probe(struct platform_device *pdev)
 		ndev->name, phydev->drv->name, dev_name(&phydev->dev),
 		phydev->irq);
 
+	device_init_wakeup(&pdev->dev, 1);
+	device_set_wakeup_enable(&pdev->dev, 0);
+
 	return 0;
 
 err_out_unregister_netdev:
@@ -1265,11 +1268,20 @@ static int lpc_net_drv_suspend(struct platform_device *pdev,
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct netdata_local *pldat = netdev_priv(ndev);
 
+	if (device_may_wakeup(&pdev->dev))
+		enable_irq_wake(ndev->irq);
+
 	if (ndev) {
 		if (netif_running(ndev)) {
 			netif_device_detach(ndev);
 			__lpc_net_shutdown(pldat);
 			clk_disable(pldat->clk);
+
+			/*
+			 * Reset again now clock is disable to be sure
+			 * EMC_MDC is down
+			 */
+			__lpc_eth_reset(pldat);
 		}
 	}
 
@@ -1280,6 +1292,9 @@ static int lpc_net_drv_resume(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct netdata_local *pldat;
+
+	if (device_may_wakeup(&pdev->dev))
+		disable_irq_wake(ndev->irq);
 
 	if (ndev) {
 		if (netif_running(ndev)) {
