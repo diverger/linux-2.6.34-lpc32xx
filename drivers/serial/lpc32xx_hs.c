@@ -253,7 +253,6 @@ static void __serial_uart_flush(struct uart_port *port)
 
 static void __serial_lpc32xx_rx(struct uart_port *port)
 {
-	struct tty_struct *tty = port->state->port.tty;
 	unsigned int tmp, flag;
 
 	/* Read data from FIFO and push into terminal */
@@ -278,8 +277,6 @@ static void __serial_lpc32xx_rx(struct uart_port *port)
 
 		tmp = __raw_readl(LPC32XX_HSUART_FIFO(port->membase));
 	}
-
-	tty_flip_buffer_push(tty);
 }
 
 static void __serial_lpc32xx_tx(struct uart_port *port)
@@ -324,9 +321,8 @@ static irqreturn_t serial_lpc32xx_interrupt(int irq, void *dev_id)
 {
 	struct uart_port *port = dev_id;
 	u32 status;
-	unsigned long flags;
 
-	local_irq_save(flags);
+	spin_lock(&port->lock);
 
 	/* Read UART status and clear latched interrupts */
 	status = __raw_readl(LPC32XX_HSUART_IIR(port->membase));
@@ -354,8 +350,12 @@ static irqreturn_t serial_lpc32xx_interrupt(int irq, void *dev_id)
 	}
 
 	/* Data received? */
-	if (status & (LPC32XX_HSU_RX_TIMEOUT_INT | LPC32XX_HSU_RX_TRIG_INT))
+	if (status & (LPC32XX_HSU_RX_TIMEOUT_INT | LPC32XX_HSU_RX_TRIG_INT)) {
 		__serial_lpc32xx_rx(port);
+		spin_unlock(&port->lock);
+		tty_flip_buffer_push(port->state->port.tty);
+		spin_lock(&port->lock);
+	}
 
 	/* Transmit data request? */
 	if ((status & LPC32XX_HSU_TX_INT) && (!uart_tx_stopped(port))) {
@@ -364,11 +364,12 @@ static irqreturn_t serial_lpc32xx_interrupt(int irq, void *dev_id)
 		__serial_lpc32xx_tx(port);
 	}
 
-	local_irq_restore(flags);
+	spin_unlock(&port->lock);
 
 	return IRQ_HANDLED;
 }
 
+/* port->lock is not held.  */
 static unsigned int serial_lpc32xx_tx_empty(struct uart_port *port)
 {
 	unsigned int ret = 0;
@@ -380,52 +381,44 @@ static unsigned int serial_lpc32xx_tx_empty(struct uart_port *port)
 	return ret;
 }
 
+/* port->lock held by caller.  */
 static void serial_lpc32xx_set_mctrl(struct uart_port *port,
 	unsigned int mctrl) {
 	/* No signals are supported on HS UARTs */
 }
 
+/* port->lock is held by caller and interrupts are disabled.  */
 static unsigned int serial_lpc32xx_get_mctrl(struct uart_port *port)
 {
 	/* No signals are supported on HS UARTs */
 	return TIOCM_CAR | TIOCM_DSR | TIOCM_CTS;
 }
 
+/* port->lock held by caller.  */
 static void serial_lpc32xx_stop_tx(struct uart_port *port)
 {
-	unsigned long flags;
 	u32 tmp;
-
-	local_irq_save(flags);
 
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp &= ~LPC32XX_HSU_TX_INT_EN;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
-
-	local_irq_restore(flags);
 }
 
+/* port->lock held by caller.  */
 static void serial_lpc32xx_start_tx(struct uart_port *port)
 {
-	unsigned long flags;
 	u32 tmp;
-
-	local_irq_save(flags);
 
 	__serial_lpc32xx_tx(port);
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp |= LPC32XX_HSU_TX_INT_EN;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
-
-	local_irq_restore(flags);
 }
 
+/* port->lock held by caller.  */
 static void serial_lpc32xx_stop_rx(struct uart_port *port)
 {
-	unsigned long flags;
 	u32 tmp;
-
-	local_irq_save(flags);
 
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp &= ~(LPC32XX_HSU_RX_INT_EN | LPC32XX_HSU_ERR_INT_EN);
@@ -433,34 +426,38 @@ static void serial_lpc32xx_stop_rx(struct uart_port *port)
 
 	__raw_writel((LPC32XX_HSU_BRK_INT | LPC32XX_HSU_RX_OE_INT |
 		LPC32XX_HSU_FE_INT), LPC32XX_HSUART_IIR(port->membase));
-
-	local_irq_restore(flags);
 }
 
+/* port->lock held by caller.  */
 static void serial_lpc32xx_enable_ms(struct uart_port *port)
 {
 	/* Modem status is not supported */
 }
 
+/* port->lock is not held.  */
 static void serial_lpc32xx_break_ctl(struct uart_port *port,
 	int break_state) {
 	unsigned long flags;
 	u32 tmp;
 
-	local_irq_save(flags);
+	spin_lock_irqsave(&port->lock, flags);
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	if (break_state != 0)
 		tmp |= LPC32XX_HSU_BREAK;
 	else
 		tmp &= ~LPC32XX_HSU_BREAK;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
-	local_irq_restore(flags);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
+/* port->lock is not held.  */
 static int serial_lpc32xx_startup(struct uart_port *port)
 {
 	int retval;
+	unsigned long flags;
 	u32 tmp;
+
+	spin_lock_irqsave(&port->lock, flags);
 
 	__serial_uart_flush(port);
 
@@ -478,28 +475,35 @@ static int serial_lpc32xx_startup(struct uart_port *port)
 		LPC32XX_HSU_OFFSET(20) | LPC32XX_HSU_TMO_INACT_4B;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
+	spin_unlock_irqrestore(&port->lock, flags);
+
 	retval = request_irq(port->irq, serial_lpc32xx_interrupt,
 			     0, MODNAME, port);
-	if (retval)
-		return retval;
+	if (!retval)
+		__raw_writel((tmp | LPC32XX_HSU_RX_INT_EN | LPC32XX_HSU_ERR_INT_EN),
+			LPC32XX_HSUART_CTRL(port->membase));
 
-	__raw_writel((tmp | LPC32XX_HSU_RX_INT_EN | LPC32XX_HSU_ERR_INT_EN),
-		LPC32XX_HSUART_CTRL(port->membase));
-
-	return 0;
+	return retval;
 }
 
+/* port->lock is not held.  */
 static void serial_lpc32xx_shutdown(struct uart_port *port)
 {
 	u32 tmp;
+	unsigned long flags;
+
+	spin_lock_irqsave(&port->lock, flags);
 
 	tmp = LPC32XX_HSU_TX_TL8B | LPC32XX_HSU_RX_TL32B |
 		LPC32XX_HSU_OFFSET(20) | LPC32XX_HSU_TMO_INACT_4B;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
+	spin_unlock_irqrestore(&port->lock, flags);
+
 	free_irq(port->irq, port);
 }
 
+/* port->lock is not held.  */
 static void serial_lpc32xx_set_termios(struct uart_port *port,
 	struct ktermios *termios, struct ktermios *old)
 {
