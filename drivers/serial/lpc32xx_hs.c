@@ -324,8 +324,9 @@ static irqreturn_t serial_lpc32xx_interrupt(int irq, void *dev_id)
 {
 	struct uart_port *port = dev_id;
 	u32 status;
+	unsigned long flags;
 
-	spin_lock(&port->lock);
+	local_irq_save(flags);
 
 	/* Read UART status and clear latched interrupts */
 	status = __raw_readl(LPC32XX_HSUART_IIR(port->membase));
@@ -363,7 +364,7 @@ static irqreturn_t serial_lpc32xx_interrupt(int irq, void *dev_id)
 		__serial_lpc32xx_tx(port);
 	}
 
-	spin_unlock(&port->lock);
+	local_irq_restore(flags);
 
 	return IRQ_HANDLED;
 }
@@ -395,13 +396,13 @@ static void serial_lpc32xx_stop_tx(struct uart_port *port)
 	unsigned long flags;
 	u32 tmp;
 
-	spin_lock_irqsave(&port->lock, flags);
+	local_irq_save(flags);
 
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp &= ~LPC32XX_HSU_TX_INT_EN;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
-	spin_unlock_irqrestore(&port->lock, flags);
+	local_irq_restore(flags);
 }
 
 static void serial_lpc32xx_start_tx(struct uart_port *port)
@@ -409,14 +410,14 @@ static void serial_lpc32xx_start_tx(struct uart_port *port)
 	unsigned long flags;
 	u32 tmp;
 
-	spin_lock_irqsave(&port->lock, flags);
+	local_irq_save(flags);
 
 	__serial_lpc32xx_tx(port);
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp |= LPC32XX_HSU_TX_INT_EN;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
-	spin_unlock_irqrestore(&port->lock, flags);
+	local_irq_restore(flags);
 }
 
 static void serial_lpc32xx_stop_rx(struct uart_port *port)
@@ -424,7 +425,7 @@ static void serial_lpc32xx_stop_rx(struct uart_port *port)
 	unsigned long flags;
 	u32 tmp;
 
-	spin_lock_irqsave(&port->lock, flags);
+	local_irq_save(flags);
 
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	tmp &= ~(LPC32XX_HSU_RX_INT_EN | LPC32XX_HSU_ERR_INT_EN);
@@ -433,7 +434,7 @@ static void serial_lpc32xx_stop_rx(struct uart_port *port)
 	__raw_writel((LPC32XX_HSU_BRK_INT | LPC32XX_HSU_RX_OE_INT |
 		LPC32XX_HSU_FE_INT), LPC32XX_HSUART_IIR(port->membase));
 
-	spin_unlock_irqrestore(&port->lock, flags);
+	local_irq_restore(flags);
 }
 
 static void serial_lpc32xx_enable_ms(struct uart_port *port)
@@ -446,14 +447,14 @@ static void serial_lpc32xx_break_ctl(struct uart_port *port,
 	unsigned long flags;
 	u32 tmp;
 
-	spin_lock_irqsave(&port->lock, flags);
+	local_irq_save(flags);
 	tmp = __raw_readl(LPC32XX_HSUART_CTRL(port->membase));
 	if (break_state != 0)
 		tmp |= LPC32XX_HSU_BREAK;
 	else
 		tmp &= ~LPC32XX_HSU_BREAK;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
-	spin_unlock_irqrestore(&port->lock, flags);
+	local_irq_restore(flags);
 }
 
 static int serial_lpc32xx_startup(struct uart_port *port)
