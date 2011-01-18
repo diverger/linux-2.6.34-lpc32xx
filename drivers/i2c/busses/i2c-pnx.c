@@ -584,11 +584,15 @@ i2c_pnx_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 	struct i2c_msg *pmsg;
 	int rc = 0, completed = 0, i;
 	struct i2c_pnx_algo_data *alg_data = adap->algo_data;
-	u32 stat = ioread32(I2C_REG_STS(alg_data));
+	u32 stat;
+
+	clk_enable(alg_data->clk);
+
+	stat = ioread32(I2C_REG_STS(alg_data));
 
 	dev_dbg(&alg_data->adapter.dev,
 		"%s(): entering: %d messages, stat = %04x.\n",
-		__func__, num, ioread32(I2C_REG_STS(alg_data)));
+		__func__, num, stat);
 
 	bus_reset_if_active(alg_data);
 
@@ -604,6 +608,7 @@ i2c_pnx_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 				"%s: 10 bits addr not supported!\n",
 				alg_data->adapter.name);
 			rc = -EINVAL;
+			clk_disable(alg_data->clk);
 			break;
 		}
 
@@ -664,6 +669,8 @@ i2c_pnx_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 
 	dev_dbg(&alg_data->adapter.dev, "%s(): exiting, stat = %x\n",
 		__func__, ioread32(I2C_REG_STS(alg_data)));
+
+	clk_disable(alg_data->clk);
 
 	if (completed != num)
 		return ((rc < 0) ? rc : -EREMOTEIO);
@@ -750,9 +757,13 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 	addr <<= 1;
 	read_flag = read_write == I2C_SMBUS_READ;
 
+	clk_enable(smbus->clk);
+
 	err = i2c_pnx_smbus_check(smbus);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		clk_disable(smbus->clk);
 		return err;
+	}
 
 	i2c_pnx_smbus_init(smbus);
 
@@ -806,8 +817,10 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 			smb->len = i + 2;
 			smb->max_rx_len = I2C_SMBUS_BLOCK_MAX;
 		} else {
-			if (!len)
+			if (!len) {
+				clk_disable(smbus->clk);
 				return -EIO;
+			}
 			i2c_pnx_fill_buffer(&tx_buf[i],
 			    data->block, len + 1);
 			tx_buf[len + i] |= stop_bit;
@@ -831,8 +844,10 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 
 	case I2C_SMBUS_BLOCK_PROC_CALL:
 		len = data->block[0];
-		if (!len)
+		if (!len) {
+			clk_disable(smbus->clk);
 			return -EINVAL;
+		}
 		tx_buf[0] = addr | start_bit;
 		tx_buf[1] = command;
 		i2c_pnx_fill_buffer(&tx_buf[2],
@@ -851,6 +866,7 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 
 	default:
 		dev_warn(&adapter->dev, "Unsupported transaction %d\n", size);
+		clk_disable(smbus->clk);
 		return -EINVAL;
 	}
 	/* Enable interrupts and wait for completion of xfer */
@@ -896,6 +912,9 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 		iowrite32(ioread32(I2C_REG_CTL(smbus)) | mcntrl_reset,
 			  I2C_REG_CTL(smbus));
 	}
+	
+	clk_disable(smbus->clk);
+
 	return err;
 }
 
@@ -921,29 +940,6 @@ static const struct i2c_algorithm pnx_algorithm = {
 	.smbus_xfer  = i2c_pnx_smbus_xfer,
 	.functionality = i2c_pnx_func,
 };
-
-#ifdef CONFIG_PM
-static int i2c_pnx_controller_suspend(struct platform_device *pdev,
-				      pm_message_t state)
-{
-	struct i2c_pnx_algo_data *alg_data = platform_get_drvdata(pdev);
-
-	/* FIXME: shouldn't this be clk_disable? */
-	clk_enable(alg_data->clk);
-
-	return 0;
-}
-
-static int i2c_pnx_controller_resume(struct platform_device *pdev)
-{
-	struct i2c_pnx_algo_data *alg_data = platform_get_drvdata(pdev);
-
-	return clk_enable(alg_data->clk);
-}
-#else
-#define i2c_pnx_controller_suspend	NULL
-#define i2c_pnx_controller_resume	NULL
-#endif
 
 static int __devinit i2c_pnx_probe(struct platform_device *pdev)
 {
@@ -1048,6 +1044,9 @@ static int __devinit i2c_pnx_probe(struct platform_device *pdev)
 	dev_dbg(&pdev->dev, "%s: Master at %#8x, irq %d.\n",
 	       alg_data->adapter.name, i2c_pnx->base, i2c_pnx->irq);
 
+	/* Disable clock until needed */
+	clk_enable(alg_data->clk);
+
 	return 0;
 
 out_irq:
@@ -1073,6 +1072,7 @@ static int __devexit i2c_pnx_remove(struct platform_device *pdev)
 	struct i2c_pnx_algo_data *alg_data = platform_get_drvdata(pdev);
 	struct i2c_pnx_data *i2c_pnx = alg_data->i2c_pnx;
 
+	clk_enable(alg_data->clk);
 	free_irq(i2c_pnx->irq, alg_data);
 	i2c_del_adapter(&alg_data->adapter);
 	clk_disable(alg_data->clk);
@@ -1092,8 +1092,6 @@ static struct platform_driver i2c_pnx_driver = {
 	},
 	.probe = i2c_pnx_probe,
 	.remove = __devexit_p(i2c_pnx_remove),
-	.suspend = i2c_pnx_controller_suspend,
-	.resume = i2c_pnx_controller_resume,
 };
 
 static int __init i2c_adap_pnx_init(void)
