@@ -444,6 +444,7 @@ static struct platform_device* fdi3250_devs[] __initdata = {
 	&lpc32xx_watchdog_device,
 	&lpc32xx_gpio_led_device,
 	&lpc32xx_rtc_device,
+	&lpc32xx_tsc_device,
 	&lpc32xx_net_device,
 #if defined(CONFIG_MTD_NAND_SLC_LPC32XX)
 	&lpc32xx_slc_nand_device,
