@@ -144,7 +144,7 @@ arch_initcall(fdi3250_spi_devices_register);
  */
 #if defined (CONFIG_SOM9DIMM3250_LCD_PANEL)
 /*
- * Support for QVGA portrait panel 
+ * Support for QVGA portrait panel
  */
 #if defined (CONFIG_SOM9DIMM3250_LCD_TOSHIBA_QVGA_35)
 static struct clcd_panel conn_lcd_panel = {
@@ -165,7 +165,7 @@ static struct clcd_panel conn_lcd_panel = {
 	},
 	.width		= -1,
 	.height		= -1,
-	.tim2		= 0, 
+	.tim2		= 0,
 	.cntl		= (CNTL_BGR | CNTL_LCDTFT | CNTL_LCDVCOMP(1) |
 				CNTL_LCDBPP16_565),
 	.bpp		= 16,
@@ -191,7 +191,7 @@ static struct clcd_panel conn_lcd_panel = {
 	},
 	.width		= -1,
 	.height		= -1,
-	.tim2		= 0, 
+	.tim2		= 0,
 	.cntl		= (CNTL_BGR | CNTL_LCDTFT | CNTL_LCDVCOMP(1) |
 				CNTL_LCDBPP16_565),
 	.bpp		= 16,
@@ -306,7 +306,7 @@ static int __init fdi3250_amba_devices_register(void)
 		struct amba_device *d = amba_devs[i];
 		amba_device_register(d, &iomem_resource);
 	}
-	
+
 	return 0;
 }
 device_initcall_sync(fdi3250_amba_devices_register);
