@@ -201,6 +201,47 @@ static struct clcd_panel conn_lcd_panel = {
 
 #endif // CONFIG_SOM9DIMM3250_LCD_PANEL
 
+#if defined (CONFIG_MMC_ARMMMCI)
+static u32 mmc_translate_vdd(struct device *dev, unsigned int vdd)
+{
+	return 0;
+}
+
+unsigned int fdi_mmc_status_always_on(struct device *dev)
+{
+	return 0;
+}
+/*
+ * Board specific MMC driver data
+ */
+struct mmci_platform_data lpc32xx_plat_data = {
+	.ocr_mask       = MMC_VDD_30_31|MMC_VDD_31_32|MMC_VDD_32_33|MMC_VDD_33_34,
+	.translate_vdd	= mmc_translate_vdd,
+	.capabilities   = MMC_CAP_4_BIT_DATA,
+	.gpio_wp        = ARCH_NR_GPIOS + 1,
+	.gpio_cd        = ARCH_NR_GPIOS + 1,
+	.status         = fdi_mmc_status_always_on,
+};
+
+/*
+ * SD card controller resources
+ */
+struct amba_device lpc32xx_mmc_device = {
+	.dev = {
+		.coherent_dma_mask      = ~0,
+		.init_name                 = "dev:mmc0",
+		.platform_data          = &lpc32xx_plat_data,
+	},
+	.res = {
+		.start                  = LPC32XX_SD_BASE,
+		.end                    = (LPC32XX_SD_BASE + SZ_4K - 1),
+		.flags                  = IORESOURCE_MEM,
+	},
+	.dma_mask                       = ~0,
+	.irq                            = {IRQ_LPC32XX_SD0, IRQ_LPC32XX_SD1},
+};
+#endif
+
 static int lpc32xx_clcd_setup(struct clcd_fb *fb)
 {
         dma_addr_t dma;
@@ -289,6 +330,9 @@ static struct amba_device *amba_devs[] __initdata = {
 	&lpc32xx_ssp0_device,
 #if defined (CONFIG_FB_ARMCLCD)
 	&lpc32xx_clcd_device,
+#endif
+#if defined(CONFIG_MMC_ARMMMCI)
+	&lpc32xx_mmc_device,
 #endif
 };
 
