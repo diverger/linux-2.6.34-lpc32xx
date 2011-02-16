@@ -177,7 +177,7 @@ static int __init lpc32xx_hsuart_console_setup(struct console *co,
 	return uart_set_options(port, co, baud, parity, bits, flow);
 }
 
-static struct uart_driver lpc32xx_hsuart_reg;
+static struct uart_driver lpc32xx_hs_reg;
 static struct console lpc32xx_hsuart_console = {
 	.name		= LPC32XX_TTY_NAME,
 	.write		= lpc32xx_hsuart_console_write,
@@ -185,7 +185,7 @@ static struct console lpc32xx_hsuart_console = {
 	.setup		= lpc32xx_hsuart_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
-	.data		= &lpc32xx_hsuart_reg,
+	.data		= &lpc32xx_hs_reg,
 };
 
 static int __init lpc32xx_hsuart_console_init(void)
