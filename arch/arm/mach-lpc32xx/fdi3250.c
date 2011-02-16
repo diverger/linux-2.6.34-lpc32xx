@@ -144,7 +144,7 @@ arch_initcall(fdi3250_spi_devices_register);
  */
 #if defined (CONFIG_SOM9DIMM3250_LCD_PANEL)
 /*
- * Support for QVGA portrait panel 
+ * Support for QVGA portrait panel
  */
 #if defined (CONFIG_SOM9DIMM3250_LCD_TOSHIBA_QVGA_35)
 static struct clcd_panel conn_lcd_panel = {
@@ -165,7 +165,7 @@ static struct clcd_panel conn_lcd_panel = {
 	},
 	.width		= -1,
 	.height		= -1,
-	.tim2		= 0, 
+	.tim2		= 0,
 	.cntl		= (CNTL_BGR | CNTL_LCDTFT | CNTL_LCDVCOMP(1) |
 				CNTL_LCDBPP16_565),
 	.bpp		= 16,
@@ -191,7 +191,7 @@ static struct clcd_panel conn_lcd_panel = {
 	},
 	.width		= -1,
 	.height		= -1,
-	.tim2		= 0, 
+	.tim2		= 0,
 	.cntl		= (CNTL_BGR | CNTL_LCDTFT | CNTL_LCDVCOMP(1) |
 				CNTL_LCDBPP16_565),
 	.bpp		= 16,
@@ -200,6 +200,47 @@ static struct clcd_panel conn_lcd_panel = {
 #endif
 
 #endif // CONFIG_SOM9DIMM3250_LCD_PANEL
+
+#if defined (CONFIG_MMC_ARMMMCI)
+static u32 mmc_translate_vdd(struct device *dev, unsigned int vdd)
+{
+	return 0;
+}
+
+unsigned int fdi_mmc_status_always_on(struct device *dev)
+{
+	return 0;
+}
+/*
+ * Board specific MMC driver data
+ */
+struct mmci_platform_data lpc32xx_plat_data = {
+	.ocr_mask       = MMC_VDD_30_31|MMC_VDD_31_32|MMC_VDD_32_33|MMC_VDD_33_34,
+	.translate_vdd	= mmc_translate_vdd,
+	.capabilities   = MMC_CAP_4_BIT_DATA,
+	.gpio_wp        = ARCH_NR_GPIOS + 1,
+	.gpio_cd        = ARCH_NR_GPIOS + 1,
+	.status         = fdi_mmc_status_always_on,
+};
+
+/*
+ * SD card controller resources
+ */
+struct amba_device lpc32xx_mmc_device = {
+	.dev = {
+		.coherent_dma_mask      = ~0,
+		.init_name                 = "dev:mmc0",
+		.platform_data          = &lpc32xx_plat_data,
+	},
+	.res = {
+		.start                  = LPC32XX_SD_BASE,
+		.end                    = (LPC32XX_SD_BASE + SZ_4K - 1),
+		.flags                  = IORESOURCE_MEM,
+	},
+	.dma_mask                       = ~0,
+	.irq                            = {IRQ_LPC32XX_SD0, IRQ_LPC32XX_SD1},
+};
+#endif
 
 static int lpc32xx_clcd_setup(struct clcd_fb *fb)
 {
@@ -290,6 +331,9 @@ static struct amba_device *amba_devs[] __initdata = {
 #if defined (CONFIG_FB_ARMCLCD)
 	&lpc32xx_clcd_device,
 #endif
+#if defined(CONFIG_MMC_ARMMMCI)
+	&lpc32xx_mmc_device,
+#endif
 };
 
 /*
@@ -306,7 +350,7 @@ static int __init fdi3250_amba_devices_register(void)
 		struct amba_device *d = amba_devs[i];
 		amba_device_register(d, &iomem_resource);
 	}
-	
+
 	return 0;
 }
 device_initcall_sync(fdi3250_amba_devices_register);
