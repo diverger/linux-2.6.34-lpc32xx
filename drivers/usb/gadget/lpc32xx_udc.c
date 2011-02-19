@@ -25,9 +25,30 @@
  */
 
 /*
- * Notes
+ * Update Feb 2011
+ * Known driver issues
  *
- * ISO functionality is untested. It probably works, but may not be reliable.
+ * Spinlock handling
+ * All spinlock grab/release issues seems to be fixed. It is possible there
+ * may be paths that haven't yet been tested.
+ *
+ * Printer class driver
+ * There seems to be an issue with this specific driver related to spinlocks.
+ * The issue does seem to be class driver related, not chip driver related.
+ * Some functions are called from the printer class driver with class specific
+ * spinlocks enabled. This might be fixed in a later kernel release.
+ *
+ * Isochronous endpoint transfers (audio class driver)
+ * Isochronous transfers do not work reliably. Tested with the audio class
+ * driver and ALSA, USB audio streaming does work, but issues appear with
+ * ISO endpoint transfer and control endpoints related to ALSA set/get
+ * functions. It is possible this may be related to the gadget audio support.
+ *
+ * Host suspend/resume do not fully shut down the USB
+ * The I2C transceiver and device clocks should be shut down when the
+ * hosts is suspended. This will be fixed later. The current drawback
+ * is power usage during suspend is higher than if not fully powered
+ * down
  */
 
 #include <linux/kernel.h>
@@ -49,6 +70,7 @@
 #include <linux/freezer.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmapool.h>
+#include <linux/workqueue.h>
 
 #include <asm/byteorder.h>
 #include <mach/hardware.h>
@@ -148,17 +170,12 @@
 #define ISP1301_I2C_INTERRUPT_RISING 0xE
 #define ISP1301_I2C_REG_CLEAR_ADDR 1
 
-#define	DRIVER_VERSION	"$Revision: 1.01 $"
+#define	DRIVER_VERSION	"$Revision: 1.02 $"
 static const char driver_name [] = "lpc32xx_udc";
 
 static void udc_set_address(struct lpc32xx_udc *udc, u32 addr);
-#if defined(UDC_ENABLE_DMA)
 static int udc_ep_in_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep);
 static int udc_ep_out_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep);
-#else
-static int udc_ep_in_req(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep);
-static int udc_ep_out_req(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep);
-#endif
 static int udc_ep0_in_req(struct lpc32xx_udc *udc);
 static int udc_ep0_out_req(struct lpc32xx_udc *udc);
 
@@ -174,9 +191,6 @@ static const char debug_filename[] = "driver/udc";
 static void proc_ep_show(struct seq_file *s, struct lpc32xx_ep *ep)
 {
 	struct lpc32xx_request *req;
-	unsigned long flags;
-
-	local_irq_save(flags);
 
 	seq_printf(s, "\n");
 	seq_printf(s, "%12s, maxpacket %4d %3s",
@@ -184,8 +198,6 @@ static void proc_ep_show(struct seq_file *s, struct lpc32xx_ep *ep)
 			ep->is_in ? "in" : "out");
 	seq_printf(s, " type %4s", epnames[ep->eptype]);
 	seq_printf(s, " ints: %12d", ep->totalints);
-	seq_printf(s, " stalls: %12d", ep->totalstalls);
-	seq_printf(s, " NAKs: %12d\n", ep->totalnaks);
 
 	if (list_empty (&ep->queue))
 		seq_printf(s, "\t(queue empty)\n");
@@ -198,16 +210,17 @@ static void proc_ep_show(struct seq_file *s, struct lpc32xx_ep *ep)
 					req->req.length, req->req.buf);
 		}
 	}
-
-	local_irq_restore(flags);
 }
 
 static int proc_udc_show(struct seq_file *s, void *unused)
 {
 	struct lpc32xx_udc *udc = s->private;
 	struct lpc32xx_ep *ep;
+	unsigned long flags;
 
 	seq_printf(s, "%s: version %s\n", driver_name, DRIVER_VERSION);
+
+	spin_lock_irqsave(&udc->lock, flags);
 
 	seq_printf(s, "vbus %s, pullup %s, %s powered%s, gadget %s\n\n",
 			udc->vbus ? "present" : "off",
@@ -226,6 +239,8 @@ static int proc_udc_show(struct seq_file *s, void *unused)
 			}
 		}
 	}
+
+	spin_unlock_irqrestore(&udc->lock, flags);
 
 	return 0;
 }
@@ -281,7 +296,7 @@ struct i2c_driver isp1301_driver = {
 	.driver = {
 		.name = "isp1301_pnx",
 	},
-	.probe = isp1301_probe, 
+	.probe = isp1301_probe,
 	.remove = isp1301_remove,
 	.id_table = isp1301_id,
 };
@@ -374,13 +389,13 @@ static void isp1301_udc_configure(struct lpc32xx_udc *udc)
 	/* Enable usb_need_clk clock after transceiver is initialized */
 	__raw_writel((__raw_readl(USB_CTRL) | (1 << 22)), USB_CTRL);
 
-	dev_dbg(udc->dev, "ISP1301 Vendor ID  : 0x%04x\n", i2c_read16(0x00));
-	dev_dbg(udc->dev, "ISP1301 Product ID : 0x%04x\n", i2c_read16(0x02));
-	dev_dbg(udc->dev, "ISP1301 Version ID : 0x%04x\n", i2c_read16(0x14));
+	dev_dbg(udc->dev, "USB transceiver Vendor ID  : 0x%04x\n", i2c_read16(0x00));
+	dev_dbg(udc->dev, "USB transceiver Product ID : 0x%04x\n", i2c_read16(0x02));
+	dev_dbg(udc->dev, "USB transceiver Version ID : 0x%04x\n", i2c_read16(0x14));
 }
 
 /* Enables or disables the USB device pullup via the ISP1301 transceiver */
-static void isp1301_pullup_enable(int en_pullup)
+static void isp1301_pullup_set(int en_pullup)
 {
 	if (en_pullup) {
 		/* Enable pullup for bus signalling */
@@ -393,19 +408,45 @@ static void isp1301_pullup_enable(int en_pullup)
 	}
 }
 
+static void pullup_work(struct work_struct *work)
+{
+	struct lpc32xx_udc *udc = container_of(work, struct lpc32xx_udc, pullup_wq);
+
+	isp1301_pullup_set(udc->pullup);
+}
+
+static void isp1301_pullup_enable(struct lpc32xx_udc *udc, int en_pullup, int block)
+{
+	if (en_pullup == udc->pullup)
+		return;
+
+	udc->pullup = en_pullup;
+	if (block)
+		isp1301_pullup_set(en_pullup);
+	else
+		schedule_work(&udc->pullup_wq);
+}
+
 #ifdef CONFIG_PM
 /* Powers up or down the ISP1301 transceiver */
 static void isp1301_set_powerstate(int enable) {
 	if (enable != 0) {
 		/* Power up ISP1301 - this ISP1301 will automatically wakeup
 		   when VBUS is detected */
-		i2c_write(MC2_GLOBAL_PWR_DN, 
+		i2c_write(MC2_GLOBAL_PWR_DN,
 				(ISP1301_I2C_MODE_CONTROL_2 | ISP1301_I2C_REG_CLEAR_ADDR));
 	}
 	else {
 		/* Power down ISP1301 */
 		i2c_write(MC2_GLOBAL_PWR_DN, ISP1301_I2C_MODE_CONTROL_2);
 	}
+}
+
+static void power_work(struct work_struct *work)
+{
+	struct lpc32xx_udc *udc = container_of(work, struct lpc32xx_udc, power_wq);
+
+	isp1301_set_powerstate(udc->poweron);
 }
 #endif
 
@@ -415,27 +456,27 @@ static void isp1301_set_powerstate(int enable) {
  *
  */
 /* Issues a single command to the USB device state machine */
-static void udc_protocol_cmd_w(struct lpc32xx_udc *udc, u32 cmd) {
-	u32 pass = 0;
-	int to;
+static void udc_protocol_cmd_w(struct lpc32xx_udc *udc, u32 cmd)
+{
+	volatile u32 tmp;
+	int to = 1000;
 
 	/* EP may lock on CLRI if this read isn't done */
-	volatile u32 tmp = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
-	(void) tmp;
+	tmp = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
 
-	while (pass == 0) {
-		__raw_writel(USBD_CCEMPTY, USBD_DEVINTCLR(udc->udp_baseaddr));
+	/* Clear CCEMPTY flash */
+	__raw_writel(USBD_CCEMPTY, USBD_DEVINTCLR(udc->udp_baseaddr));
 
-		/* Write command code */
-		__raw_writel(cmd, USBD_CMDCODE(udc->udp_baseaddr));
-		to = 10000;
-		while (((__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) &
-						USBD_CCEMPTY) == 0) && (to > 0)) {
-			to--;
-		}
+	/* Write command code and wait for protocol engine acceptance */
+	__raw_writel(cmd, USBD_CMDCODE(udc->udp_baseaddr));
 
-		if (to > 0) pass = 1;
-	}
+	/* Wait for CCEMPTY to signal command acceptance */
+	tmp = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
+	while ((!(__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) & USBD_CCEMPTY))
+		&& (to > 0))
+		to--;
+	if (!to)
+		dev_dbg(udc->dev, "Protocol engine didn't accept command (CCEMPTY)\n");
 }
 
 /* Issues 2 commands (or command and data) to the USB device state machine */
@@ -446,21 +487,26 @@ static inline void udc_protocol_cmd_data_w(struct lpc32xx_udc *udc, u32 cmd, u32
 
 /* Issues a single command to the USB device state machine and reads
    response data */
-static u32 udc_protocol_cmd_r(struct lpc32xx_udc *udc, u32 cmd) {
-	/* Write a command and read data from the protocol engine */
-	u32 tmp;
+static u32 udc_protocol_cmd_r(struct lpc32xx_udc *udc, u32 cmd)
+{
+	volatile u32 tmp;
+	int to = 1000;
 
+	/* Write a command and read data from the protocol engine */
 	__raw_writel((USBD_CDFULL | USBD_CCEMPTY),
 			USBD_DEVINTCLR(udc->udp_baseaddr));
 
 	/* Write command code */
 	udc_protocol_cmd_w(udc, cmd);
-	while ((__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) &
-				USBD_CDFULL) == 0);
 
-	tmp = __raw_readl(USBD_CMDDATA(udc->udp_baseaddr));
+	tmp = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
+	while ((!(__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) & USBD_CDFULL))
+		&& (to > 0))
+		to--;
+	if (!to)
+		dev_dbg(udc->dev, "Protocol engine didn't receive response (CDFULL)\n");
 
-	return tmp;
+	return __raw_readl(USBD_CMDDATA(udc->udp_baseaddr));
 }
 
 /*
@@ -527,6 +573,8 @@ static inline void udc_ep_dma_disable(struct lpc32xx_udc *udc, u32 hwep) {
    The interrupt (FIFO or DMA) is not enabled with this function */
 static void udc_realize_hwep(struct lpc32xx_udc *udc, u32 hwep,
 		u32 maxpacket) {
+	int to = 1000;
+
 	__raw_writel(USBD_EP_RLZED, USBD_DEVINTCLR(udc->udp_baseaddr));
 	__raw_writel(hwep, USBD_EPIND(udc->udp_baseaddr));
 	udc->realized_eps |= (1 << hwep);
@@ -534,7 +582,12 @@ static void udc_realize_hwep(struct lpc32xx_udc *udc, u32 hwep,
 	__raw_writel(maxpacket, USBD_EPMAXPSIZE(udc->udp_baseaddr));
 
 	/* Wait until endpoint is realized in hardware */
-	while (!(__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) & USBD_EP_RLZED));
+	while ((!(__raw_readl(USBD_DEVINTST(udc->udp_baseaddr)) & USBD_EP_RLZED))
+		&& (to > 0))
+		to--;
+	if (!to)
+		dev_dbg(udc->dev, "EP not correctly realized in hardware\n");
+
 	__raw_writel(USBD_EP_RLZED, USBD_DEVINTCLR(udc->udp_baseaddr));
 }
 
@@ -601,7 +654,6 @@ static inline u32 udc_clearep_getsts(struct lpc32xx_udc *udc, u32 hwep) {
 	return udc_selep_clrint(udc, hwep);
 }
 
-#if defined(UDC_ENABLE_DMA)
 /*
  *
  * USB EP DMA support
@@ -614,9 +666,8 @@ static struct lpc32xx_usbd_dd_gad *udc_dd_alloc(struct lpc32xx_udc *udc) {
 
 	dd = (struct lpc32xx_usbd_dd_gad *) dma_pool_alloc(
 			udc->dd_cache, (GFP_KERNEL | GFP_DMA), &dma);
-	if (dd) {
+	if (dd)
 		dd->this_dma = dma;
-	}
 
 	return dd;
 }
@@ -626,7 +677,6 @@ static void udc_dd_free(struct lpc32xx_udc *udc, struct lpc32xx_usbd_dd_gad *dd)
 {
 	dma_pool_free(udc->dd_cache, dd, dd->this_dma);
 }
-#endif
 
 /*
  *
@@ -639,6 +689,8 @@ static void udc_dd_free(struct lpc32xx_udc *udc, struct lpc32xx_usbd_dd_gad *dd)
 #define OTGOFF_CLK_MASK (AHB_M_CLOCK_ON | I2C_CLOCK_ON)
 static void udc_clk_set(struct lpc32xx_udc *udc, int enable)
 {
+	int to = 1000;
+
 	if (enable != 0) {
 		if (udc->clocked)
 			return;
@@ -654,15 +706,17 @@ static void udc_clk_set(struct lpc32xx_udc *udc, int enable)
 		/* Set to enable all needed USB OTG clocks */
 		__raw_writel(USB_CLOCK_MASK, USB_OTG_CLK_CTRL);
 
-		while ((__raw_readl(USB_OTG_CLK_STAT) & USB_CLOCK_MASK) !=
-				USB_CLOCK_MASK);
+		while (((__raw_readl(USB_OTG_CLK_STAT) & USB_CLOCK_MASK) !=
+				USB_CLOCK_MASK) && (to > 0))
+			to--;
+		if (!to)
+			dev_dbg(udc->dev, "Cannot enable USB OTG clocking\n");
 	}
 	else {
 		if (!udc->clocked)
 			return;
 
 		udc->clocked = 0;
-		udc->gadget.speed = USB_SPEED_UNKNOWN;
 
 		/* Never disable the USB_HCLK during normal operation */
 
@@ -675,8 +729,11 @@ static void udc_clk_set(struct lpc32xx_udc *udc, int enable)
 		/* Set to enable all needed USB OTG clocks */
 		__raw_writel(OTGOFF_CLK_MASK, USB_OTG_CLK_CTRL);
 
-		while ((__raw_readl(USB_OTG_CLK_STAT) & OTGOFF_CLK_MASK) !=
-				OTGOFF_CLK_MASK);
+		while (((__raw_readl(USB_OTG_CLK_STAT) & OTGOFF_CLK_MASK) !=
+				OTGOFF_CLK_MASK) && (to > 0))
+			to--;
+		if (!to)
+			dev_dbg(udc->dev, "Cannot disable USB OTG clocking\n");
 	}
 }
 
@@ -692,7 +749,7 @@ static void udc_disable(struct lpc32xx_udc *udc) {
 
 	/* Disable and reset all endpoint interrupts */
 	for (i = 0; i < 32; i++) {
-		uda_disable_hwepint(udc, i);
+	     	uda_disable_hwepint(udc, i);
 		uda_clear_hwepint(udc, i);
 		udc_disable_hwep(udc, i);
 		udc_unrealize_hwep(udc, i);
@@ -716,8 +773,6 @@ static void udc_enable(struct lpc32xx_udc *udc)
 {
 	u32 i;
 	struct lpc32xx_ep *ep = &udc->ep[0];
-
-	udc->gadget.speed = USB_SPEED_UNKNOWN;
 
 	/* Start with known state */
 	udc_disable(udc);
@@ -755,10 +810,8 @@ static void udc_enable(struct lpc32xx_udc *udc)
 	udc_set_address(udc, 0);
 	udc_set_address(udc, 0);
 
-#if defined(UDC_ENABLE_DMA)
 	/* Enable master DMA interrupts */
 	__raw_writel((USBD_SYS_ERR_INT | USBD_EOT_INT), USBD_DMAINTEN(udc->udp_baseaddr));
-#endif
 
 	udc->dev_status = 0;
 }
@@ -842,7 +895,7 @@ static void udc_pop_fifo(struct lpc32xx_udc *udc, u8 *data, u32 bytes) {
 			p16 = (u16 *) data;
 			cbytes = (bytes & ~0x3);
 
-			/* Copy 32-bit sized objects first with 16-bit alignment */		
+			/* Copy 32-bit sized objects first with 16-bit alignment */
 			for (n = 0; n < cbytes; n += 4) {
 				tmp = __raw_readl(USBD_RXDATA(udc->udp_baseaddr));
 				*p16++ = (u16) (tmp & 0xFFFF);
@@ -867,21 +920,18 @@ static void udc_pop_fifo(struct lpc32xx_udc *udc, u8 *data, u32 bytes) {
 static u32 udc_read_hwep(struct lpc32xx_udc *udc, u32 hwep, u32 *data,
 		int bytes) {
 	volatile u32 tmpv;
+	int to = 1000;
 	u32 tmp, hwrep = ((hwep & 0x1E) << 1) | CTRL_RD_EN;
 
 	/* Setup read of endpoint */
 	__raw_writel(hwrep, USBD_CTRL(udc->udp_baseaddr));
-	__raw_writel(hwrep, USBD_CTRL(udc->udp_baseaddr));
-
-	while (__raw_readl(USBD_CTRL(udc->udp_baseaddr)) != hwrep) {
-		__raw_writel(hwrep, USBD_CTRL(udc->udp_baseaddr));
-	}
 
 	/* Wait until packet is ready */
-	tmpv = 0;
-	while ((tmpv & PKT_RDY) == 0) {
-		tmpv = __raw_readl(USBD_RXPLEN(udc->udp_baseaddr));
-	}
+	while (((__raw_readl(USBD_RXPLEN(udc->udp_baseaddr)) & PKT_RDY) == 0)
+		&& (to > 0))
+		to--;
+	if (!to)
+		dev_dbg(udc->dev, "No packet ready on FIFO EP read\n");
 
 	/* Mask out count */
 	tmp = tmpv & PKT_LNGTH_MASK;
@@ -893,7 +943,6 @@ static u32 udc_read_hwep(struct lpc32xx_udc *udc, u32 hwep, u32 *data,
 		udc_pop_fifo(udc, (u8 *) data, tmp);
 	}
 
-	__raw_writel(((hwep & 0x1E) << 1), USBD_CTRL(udc->udp_baseaddr));
 	__raw_writel(((hwep & 0x1E) << 1), USBD_CTRL(udc->udp_baseaddr));
 
 	/* Clear the buffer */
@@ -982,14 +1031,10 @@ static void udc_write_hwep(struct lpc32xx_udc *udc, u32 hwep,
 
 	/* Setup write of endpoint */
 	__raw_writel(hwwep, USBD_CTRL(udc->udp_baseaddr));
-	__raw_writel(hwwep, USBD_CTRL(udc->udp_baseaddr));
-	while (__raw_readl(USBD_CTRL(udc->udp_baseaddr)) != hwwep) {
-		__raw_writel(hwwep, USBD_CTRL(udc->udp_baseaddr));
-	}
 
 	__raw_writel(bytes, USBD_TXPLEN(udc->udp_baseaddr));
 
-	/* Need at least 1 byte to rgigger TX, may not be needed */
+	/* Need at least 1 byte to trigger TX */
 	if (bytes == 0) {
 		__raw_writel(0, USBD_TXDATA(udc->udp_baseaddr));
 	}
@@ -997,7 +1042,6 @@ static void udc_write_hwep(struct lpc32xx_udc *udc, u32 hwep,
 		udc_stuff_fifo(udc, (u8 *) data, bytes);
 	}
 
-	__raw_writel(((hwep & 0x1E) << 1), USBD_CTRL(udc->udp_baseaddr));
 	__raw_writel(((hwep & 0x1E) << 1), USBD_CTRL(udc->udp_baseaddr));
 
 	udc_val_buffer_hwep(udc, hwep);
@@ -1023,7 +1067,7 @@ static void uda_usb_reset(struct lpc32xx_udc *udc) {
 	/* Re-init device controller and EP0 */
 	udc_enable(udc);
 	udc->gadget.speed = USB_SPEED_FULL;
-	
+
 	for (i = 1; i < NUM_ENDPOINTS; i++) {
 		struct lpc32xx_ep *ep = &udc->ep[i];
 		ep->req_pending = 0;
@@ -1079,6 +1123,7 @@ static void udc_reinit(struct lpc32xx_udc *udc)
 	udc->ep0state = WAIT_FOR_SETUP;
 }
 
+/* Must be called with lock */
 static void done(struct lpc32xx_ep *ep, struct lpc32xx_request *req, int status)
 {
 	struct lpc32xx_udc *udc = ep->udc;
@@ -1091,8 +1136,7 @@ static void done(struct lpc32xx_ep *ep, struct lpc32xx_request *req, int status)
 		status = req->req.status;
 	}
 
-#if defined(UDC_ENABLE_DMA)
-	if (ep->uses_dma) {
+	if (ep->lep) {
 		enum dma_data_direction direction;
 
 		if (ep->is_in)
@@ -1114,18 +1158,18 @@ static void done(struct lpc32xx_ep *ep, struct lpc32xx_request *req, int status)
 		/* Free DDs */
 		udc_dd_free(udc, req->dd_desc_ptr);
 	}
-#endif
 
 	if (status && status != -ESHUTDOWN) {
 		ep_dbg(ep, "%s done %p, status %d\n", ep->ep.name, req, status);
 	}
 
 	spin_unlock(&udc->lock);
+
 	req->req.complete(&ep->ep, &req->req);
 	spin_lock(&udc->lock);
 }
 
-
+/* Must be called with lock */
 static void nuke(struct lpc32xx_ep *ep, int status)
 {
 	struct lpc32xx_request *req;
@@ -1143,6 +1187,7 @@ static void nuke(struct lpc32xx_ep *ep, int status)
 	}
 }
 
+/* Must be called with lock */
 static void stop_activity(struct lpc32xx_udc *udc)
 {
 	struct usb_gadget_driver *driver = udc->driver;
@@ -1159,24 +1204,19 @@ static void stop_activity(struct lpc32xx_udc *udc)
 		nuke(ep, -ESHUTDOWN);
 	}
 	if (driver) {
+		spin_unlock(&udc->lock);
 		driver->disconnect(&udc->gadget);
-                /*
-		 *  Wait for all the endpoints to disable,
-		 *  before disabling clocks. Don't wait if 
-		 *  endpoints are not enabled. 
-		 */
-		if(atomic_read(&udc->enabled_ep_cnt))
-			wait_event_interruptible(udc->ep_disable_wait_queue,
-					(atomic_read(&udc->enabled_ep_cnt) == 0));
+		spin_lock(&udc->lock);
 	}
 
-	isp1301_pullup_enable(0);
+	isp1301_pullup_enable(udc, 0, 0);
 	udc_disable(udc);
 	udc_reinit(udc);
 }
 
 /*
  * Activate or kill host pullup
+ * Can be called with or without lock
  */
 static void pullup(struct lpc32xx_udc *udc, int is_on)
 {
@@ -1186,16 +1226,11 @@ static void pullup(struct lpc32xx_udc *udc, int is_on)
 	if (!udc->enabled || !udc->vbus)
 		is_on = 0;
 
-	if (is_on) {
-		udc_clk_set(udc, 1);
-		isp1301_pullup_enable(1);
-	} else {
-		stop_activity(udc);
-		isp1301_pullup_enable(0);
-		udc_clk_set(udc, 0);
-	}
+	if (is_on != udc->pullup)
+		isp1301_pullup_enable(udc, is_on, 0);
 }
 
+/* Must be called without lock */
 static int lpc32xx_ep_disable (struct usb_ep * _ep)
 {
 	struct lpc32xx_ep *ep = container_of(_ep, struct lpc32xx_ep, ep);
@@ -1205,8 +1240,7 @@ static int lpc32xx_ep_disable (struct usb_ep * _ep)
 	if ((ep->hwep_num_base == 0) || (ep->hwep_num == 0)) {
 		return -EINVAL;
 	}
-
-	local_irq_save(flags);
+	spin_lock_irqsave(&udc->lock, flags);
 
 	nuke(ep, -ESHUTDOWN);
 
@@ -1222,7 +1256,6 @@ static int lpc32xx_ep_disable (struct usb_ep * _ep)
 
 	/* Remove the DD pointer in the UDCA */
 	udc->udca_v_base[ep->hwep_num] = 0;
-	ep->uses_dma = 0;
 
 	/* Disable and reset endpoint and interrupt */
 	uda_clear_hwepint(udc, ep->hwep_num);
@@ -1230,7 +1263,7 @@ static int lpc32xx_ep_disable (struct usb_ep * _ep)
 
 	ep->hwep_num = 0;
 
-	local_irq_restore(flags);
+	spin_unlock_irqrestore(&udc->lock, flags);
 
         atomic_dec(&udc->enabled_ep_cnt);
         wake_up(&udc->ep_disable_wait_queue);
@@ -1238,6 +1271,7 @@ static int lpc32xx_ep_disable (struct usb_ep * _ep)
 	return 0;
 }
 
+/* Must be called without lock */
 static int lpc32xx_ep_enable(struct usb_ep *_ep,
 		const struct usb_endpoint_descriptor *desc)
 {
@@ -1297,8 +1331,7 @@ static int lpc32xx_ep_enable(struct usb_ep *_ep,
 		case USB_ENDPOINT_XFER_ISOC:
 			break;
 	}
-
-	local_irq_save(flags);
+	spin_lock_irqsave(&udc->lock, flags);
 
 	/* Initialize endpoint to match the selected descriptor */
 	ep->is_in = (desc->bEndpointAddress & USB_DIR_IN) != 0;
@@ -1331,17 +1364,16 @@ static int lpc32xx_ep_enable(struct usb_ep *_ep,
 	__raw_writel((1 << ep->hwep_num), USBD_SYSERRTINTCLR(udc->udp_baseaddr));
 	__raw_writel((1 << ep->hwep_num), USBD_DMARCLR(udc->udp_baseaddr));
 
-#if defined(UDC_ENABLE_DMA)
-	ep->uses_dma = 1;
-#endif
-
-	local_irq_restore(flags);
+	spin_unlock_irqrestore(&udc->lock, flags);
 
 	atomic_inc(&udc->enabled_ep_cnt);
 	return 0;
 }
 
-/* Allocate a USB request list */
+/*
+ * Allocate a USB request list
+ * Can be called with or without lock
+ */
 static struct usb_request *lpc32xx_ep_alloc_request(
 		struct usb_ep *_ep, gfp_t gfp_flags)
 {
@@ -1355,7 +1387,10 @@ static struct usb_request *lpc32xx_ep_alloc_request(
 	return &req->req;
 }
 
-/* De-allocate a USB request list */
+/*
+ * De-allocate a USB request list
+ * Can be called with or without lock
+ */
 static void lpc32xx_ep_free_request(struct usb_ep *_ep,
 		struct usb_request *_req)
 {
@@ -1366,6 +1401,7 @@ static void lpc32xx_ep_free_request(struct usb_ep *_ep,
 	kfree(req);
 }
 
+/* Must be called without lock */
 static int lpc32xx_ep_queue(struct usb_ep *_ep,
 		struct usb_request *_req, gfp_t gfp_flags)
 {
@@ -1395,8 +1431,7 @@ static int lpc32xx_ep_queue(struct usb_ep *_ep,
 		return -EINVAL;
 	}
 
-#if defined(UDC_ENABLE_DMA)
-	if (ep->uses_dma) {
+	if (ep->lep) {
 		enum dma_data_direction direction;
 		struct lpc32xx_usbd_dd_gad *dd;
 
@@ -1435,17 +1470,18 @@ static int lpc32xx_ep_queue(struct usb_ep *_ep,
 		/* Special handling for ISO EPs */
 		if (ep->eptype == EP_ISO_TYPE) {
 			dd->dd_setup = DD_SETUP_ISO_EP |
-				DD_SETUP_PACKETLEN(ep->ep.maxpacket) |
-				DD_SETUP_DMALENBYTES(req->req.length);
-			dd->dd_iso_ps_mem_addr = (u32 *) ((u32) dd->this_dma + 20);
-			dd->iso_status[0] = req->req.length;
+				DD_SETUP_PACKETLEN(0) |
+				DD_SETUP_DMALENBYTES(1);
+			dd->dd_iso_ps_mem_addr = (u32 *) ((u32) dd->this_dma + 24);
+			if (ep->is_in)
+				dd->iso_status[0] = req->req.length;
+			else
+				dd->iso_status[0] = 0;
 		}
-		else {
+		else
 			dd->dd_setup = DD_SETUP_PACKETLEN(ep->ep.maxpacket) |
 				DD_SETUP_DMALENBYTES(req->req.length);
-		}
 	}
-#endif
 
 	ep_dbg(ep, "%s queue req %p len %d buf %p (in=%d) z=%d\n", _ep->name, _req, _req->length,
 			_req->buf, ep->is_in, _req->zero);
@@ -1475,35 +1511,25 @@ static int lpc32xx_ep_queue(struct usb_ep *_ep,
 		}
 		else if (ep->is_in) {
 			/* IN packet to host and kick off transfer */
-			if (!ep->req_pending) {
-#if defined(UDC_ENABLE_DMA)
+			if (!ep->req_pending)
 				udc_ep_in_req_dma(udc, ep);
-#else
-				uda_enable_hwepint(udc, ep->hwep_num);
-				udc_ep_in_req(udc, ep);
-#endif
-			}
 		}
 		else {
 			/* OUT packet from host and kick off list */
-			if (!ep->req_pending) {
-#if defined(UDC_ENABLE_DMA)
+			if (!ep->req_pending)
 				udc_ep_out_req_dma(udc, ep);
-#else
-				uda_enable_hwepint(udc, ep->hwep_num);
-				udc_ep_out_req(udc, ep);
-#endif
-			}
 		}
 	}
-	else
+	else {
 		list_add_tail(&req->queue, &ep->queue);
+	}
 
 	spin_unlock_irqrestore(&udc->lock, flags);
 
 	return (status < 0) ? status : 0;
 }
 
+/* Must be called without lock */
 static int lpc32xx_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 {
 	struct lpc32xx_ep	*ep;
@@ -1527,11 +1553,13 @@ static int lpc32xx_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 	}
 
 	done(ep, req, -ECONNRESET);
+
 	spin_unlock_irqrestore(&ep->udc->lock, flags);
 
 	return 0;
 }
 
+/* Must be called without lock */
 static int lpc32xx_ep_set_halt(struct usb_ep *_ep, int value)
 {
 	struct lpc32xx_ep *ep = container_of(_ep, struct lpc32xx_ep, ep);
@@ -1573,7 +1601,6 @@ static const struct usb_ep_ops lpc32xx_ep_ops = {
 	.set_halt	= lpc32xx_ep_set_halt,
 };
 
-#if defined(UDC_ENABLE_DMA)
 /* Setup up a IN request for DMA transfer - this consists of determining the
    list of DMA addresses for the transfer, allocating DMA Descriptors,
    installing the DD into the UDCA, and then enabling the DMA for that EP */
@@ -1589,9 +1616,13 @@ static int udc_ep_in_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep)
 
 	/* Place the DD Descriptor into the UDCA */
 	udc->udca_v_base[hwep] = (u32) req->dd_desc_ptr->this_dma;
-	
+
 	/* Enable DMA and interrupt for the HW EP */
 	udc_ep_dma_enable(udc, hwep);
+
+	/* Clear ZLP if last packet is not of MAXP size */
+	if (req->req.length % ep->ep.maxpacket)
+		req->send_zlp = 0;
 
 	return 0;
 }
@@ -1611,61 +1642,83 @@ static int udc_ep_out_req_dma(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep)
 
 	/* Place the DD Descriptor into the UDCA */
 	udc->udca_v_base[hwep] = (u32) req->dd_desc_ptr->this_dma;
-	
+
 	/* Enable DMA and interrupt for the HW EP */
 	udc_ep_dma_enable(udc, hwep);
-
 	return 0;
 }
+/* Send a ZLP on a non-0 IN EP */
+void udc_send_in_zlp(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
+	/* Clear EP status */
+	udc_clearep_getsts(udc, ep->hwep_num);
 
-/* Handle EP completion */
+	/* Send ZLP via FIFO mechanism */
+	udc_write_hwep(udc, ep->hwep_num, NULL, 0);
+}
+
+/*
+ * Handle EP completion for ZLP
+ * This function will only be called when a delayed ZLP needs to be sent out
+ * after a DMA transfer has filled both buffers.
+ */
 void udc_handle_eps(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 	u32 epstatus;
 	struct lpc32xx_request *req;
 
-	uda_disable_hwepint(udc, ep->hwep_num);
-
 	if (ep->hwep_num <= 0)
 		return;
 
+	uda_clear_hwepint(udc,ep->hwep_num);
+
+	/* If this interrupt isn't enabled, return now */
+	if (!(udc->enabled_hwepints & (1 << ep->hwep_num)))
+		return;
+
+	/* Get endpoint status */
 	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
 
-	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
-	done(ep, req, 0);
+	/*
+	 * This should never happen, but protect against writing to the
+	 * buffer when full.
+	 */
+	if (epstatus & EP_SEL_F)
+		return;
 
-	/* Start another request if ready */
-	if(!list_empty(&ep->queue)) {
-		if (ep->is_in) {
-			udc_ep_in_req_dma(udc, ep);
-		}
-		else {
-			udc_ep_out_req_dma(udc, ep);
-		}
+	if (ep->is_in) {
+		udc_send_in_zlp(udc,ep);
+		uda_disable_hwepint(udc, ep->hwep_num);
 	}
 	else
-		ep->req_pending = 0;
+		return;
+
+	/* If there isn't a request waiting, something went wrong */
+	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
+	if (req) {
+		done(ep, req, 0);
+
+		/* Start another request if ready */
+		if(!list_empty(&ep->queue)) {
+			if (ep->is_in)
+				udc_ep_in_req_dma(udc, ep);
+			else
+				udc_ep_out_req_dma(udc, ep);
+		}
+		else
+			ep->req_pending = 0;
+	}
 }
 
-/* Send a ZLP on a non-0 IN EP */
-void udc_send_in_zlp(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep,
-		struct lpc32xx_usbd_dd_gad *dd) {
-	/* Set up EP interrupt status */
-	uda_enable_hwepint(udc, ep->hwep_num);
-	udc_clearep_getsts(udc, ep->hwep_num);
-
-	/* Send ZLP */
-	udc_write_hwep(udc, ep->hwep_num, NULL, 0);
-}
 
 /* DMA end of transfer completion */
 static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
-	u32 status;
+	u32 status, epstatus;
 	struct lpc32xx_request *req;
 	struct lpc32xx_usbd_dd_gad *dd;
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 	ep->totalints++;
 #endif
+
 	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
 	if (!req) {
 		ep_err(ep, "DMA interrupt on no req!\n");
@@ -1673,8 +1726,9 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 	}
 	dd = req->dd_desc_ptr;
 
-	/* Wait for end of descriptor to retire */
-	while (!(dd->dd_status & DD_STATUS_DD_RETIRED));
+	/* DMA descriptor should always be retired for this call */
+	if (!(dd->dd_status & DD_STATUS_DD_RETIRED))
+		ep_warn(ep, "DMA descriptor did not retire\n");
 
 	/* Disable DMA */
 	udc_ep_dma_disable(udc, ep->hwep_num);
@@ -1691,7 +1745,6 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 		   so recovering the transfer is not possible. Close the request with
 		   an error */
 		done(ep, req, -ECONNABORTED);
-
 		return;
 	}
 
@@ -1702,6 +1755,7 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 			/* DD not serviced? This shouldn't happen! */
 			ep->req_pending = 0;
 			ep_err(ep, "DMA critical EP error: DD not serviced (0x%x)!\n", status);
+
 			done(ep, req, -ECONNABORTED);
 			return;
 
@@ -1725,52 +1779,40 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 			return;
 	}
 
-	/* Save transferred data size */
-	req->req.actual += DD_STATUS_CURDMACNT(status);
-
-	/* Work around the wierd underrun packet issue */
-	if ((!ep->is_in) && (!(req->req.actual % ep->maxpacket)) &&
-			((req->req.length - req->req.actual) > 0)) {
-		ep_dbg(ep, "Short packet in unexpected situation!\n");
-
-		// WTF is this? An underrun packet on OUT with no ZLP! Hardware issue? */
-		dd->dd_next_phy = dd->dd_next_v = NULL;
-		dd->dd_buffer_addr = (u32) req->req.dma;
-		dd->dd_buffer_addr += req->req.actual;
-		dd->dd_status = 0;
-
-		/* Special handling for ISO EPs */
-		dd->dd_setup = DD_SETUP_PACKETLEN(ep->ep.maxpacket) |
-			DD_SETUP_DMALENBYTES(req->req.length - req->req.actual);
-
-		/* Do the remainder of the req */
-		udc_ep_out_req_dma(udc, ep);
-
-		return;
-	}
-
 	/* ISO endpoints are handled differently */
 	if (ep->eptype == EP_ISO_TYPE) {
-		if (!ep->is_in)
+		if (ep->is_in)
+			req->req.actual = req->req.length;
+		else
 			req->req.actual = dd->iso_status[0] & 0xFFFF;
-	}
+	} else
+		req->req.actual += DD_STATUS_CURDMACNT(status);
 
-	/* For an Bulk IN EP, the DMA engine will only send data as specified in the
-	   descriptor. If the total transfer size is a multiple of the max packet
-	   size, then the transfer was completed, but no ZLP was sent. The ZLP needs
-	   to be sent using the FIFO mechanism to terminate this transfer */
+	/* Send a ZLP if necessary. This will be done for non-int
+	   packets which have a size that is a divisor of MAXP */
 	if (req->send_zlp) {
-		udc_send_in_zlp(udc, ep, dd);
+		/*
+		 * If at least 1 buffer is available, send the ZLP now.
+		 * Otherwise, the ZLP send needs to be deferred until a
+		 * buffer is available.
+		 */
+		if (udc_clearep_getsts(udc, ep->hwep_num) & EP_SEL_F) {
+			udc_clearep_getsts(udc, ep->hwep_num);
+			uda_enable_hwepint(udc, ep->hwep_num);
+			epstatus = udc_clearep_getsts(udc, ep->hwep_num);
 
-		/* Just exit */
-		return;
+			/* Let the EP interrupt handle the ZLP */
+			return;
+		}
+		else
+			udc_send_in_zlp(udc, ep);
 	}
 
 	/* Transfer request is complete */
 	done(ep, req, 0);
 
-	udc_clearep_getsts(udc, ep->hwep_num);
 	/* Start another request if ready */
+	udc_clearep_getsts(udc, ep->hwep_num);
 	if(!list_empty((&ep->queue))) {
 		if (ep->is_in) {
 			udc_ep_in_req_dma(udc, ep);
@@ -1779,157 +1821,10 @@ static void udc_handle_dma_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
 			udc_ep_out_req_dma(udc, ep);
 		}
 	}
-	else 
-		ep->req_pending = 0;
-}
-
-#else
-/* This function was called if a new request is ready to be placed into the SEND FIFO
-   for transfer to the host, or when a previous transfer to the host has completed. */
-static int udc_ep_in_req(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
-	struct lpc32xx_request *req;
-	u32 ts, epstatus, bufst;
-	int is_last;
-
-	/* Select and clear EP interrupt */
-	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
-
-	if (epstatus & EP_SEL_ST) {
-		/* EP is stalled */
-		ep->totalstalls++;
-		return 0;
-	}
-
-	if (epstatus & EP_SEL_EPN) {
-		/* NAK'd on other side */
-		ep->totalnaks++;
-	}
-
-	bufst = (epstatus & EP_SEL_F);
-
-	/* Are any requests available? */
-	if (list_empty(&ep->queue)) {
-		if (!bufst) {
-			/* No reqs and the hardware is idle, disable IRQ */
-			uda_disable_hwepint(udc, ep->hwep_num);
-		}
-
-		return 0;
-	}
-
-	/* If both buffers are currently full, just exit for now */
-	if (bufst)
-		return 0;
-
-	/* A buffer is available in the hardware, so we can fill  it */
-	req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
-
-	/* Limit packet size to the size of the EP */
-	ts = req->req.length - req->req.actual;
-	if (ts > ep->ep.maxpacket)
-		ts = ep->ep.maxpacket;
-
-	/* Write data to the EP0 FIFO and start transfer */
-	ep_dbg(ep, "SEND %s 0x%x(%d)\n", ep->ep.name, (u32)(req->req.buf + req->req.actual), ts);
-	udc_write_hwep(udc, ep->hwep_num, (req->req.buf + req->req.actual), ts);
-
-	/* Increment data pointer */
-	req->req.actual += ts;
-
-	if (ts < ep->ep.maxpacket)
-		is_last = 1;
-	else if ((req->req.actual != req->req.length) || (req->send_zlp)) {
-		req->send_zlp = 0;
-		is_last = 0;
-	}
 	else
-		is_last = 1;
+		ep->req_pending = 0;
 
-	if (is_last) {
-		/* Transfer request is complete */
-		done(ep, req, 0);
-		return 1;
-	}
-
-	/* Stay in data transfer state */
-	return 0;
 }
-
-static int udc_ep_out_req(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
-	struct lpc32xx_request *req;
-	u32 tr, bufferspace, epstatus;
-
-	/* Clear EP interrupt */
-	epstatus = udc_clearep_getsts(udc, ep->hwep_num);
-
-	if (epstatus & EP_SEL_ST) {
-		/* EP is stalled */
-		ep->totalstalls++;
-	}
-
-	if (epstatus & EP_SEL_EPN) {
-		/* Sent NAK */
-		ep->totalnaks++;
-	}
-
-	/* Are any requests available? */
-	if (list_empty(&ep->queue)) {
-		uda_disable_hwepint(udc, ep->hwep_num);
-
-		return 0;
-	}
-
-	if (epstatus & EP_SEL_F) {
-		req = list_entry(ep->queue.next, struct lpc32xx_request, queue);
-		if (req->req.length == 0) {
-			ep_dbg(ep, "%s OUT zero buffer length!\n", ep->ep.name);
-			return 0;
-		}
-
-		/* Limit transfer size to size of endpoint */
-		bufferspace = req->req.length - req->req.actual;
-		if (bufferspace > ep->ep.maxpacket)
-			bufferspace = ep->ep.maxpacket;
-
-		/* Copy data to buffer from FIFO */
-		prefetchw(req->req.buf + req->req.actual);
-		tr = udc_read_hwep(udc, ep->hwep_num,
-				(req->req.buf + req->req.actual), bufferspace);
-
-		ep_dbg(ep, "RECV %s 0x%x(%d) %d %d\n", ep->ep.name, (u32)(req->req.buf + req->req.actual), tr,
-				req->req.actual, req->req.length);
-		req->req.actual += tr;
-
-		if ((tr < ep->ep.maxpacket) || (req->req.actual == req->req.length)) {
-			/* This is the last packet */
-			done(ep, req, 0);
-
-			return 1;
-		}
-	}
-
-	return 0;
-}
-
-static void udc_handle_ep(struct lpc32xx_udc *udc, struct lpc32xx_ep *ep) {
-	ep->totalints++;
-
-	if (!ep->desc) {
-		uda_disable_hwepint(udc, ep->hwep_num);
-		return;
-	}
-
-	/* Nice and easy */
-	if (ep->is_in) {
-		/* Handle IN request */
-		udc_ep_in_req(udc, ep);
-	}
-	else {
-		/* Handle OUT request */
-		udc_ep_out_req(udc, ep);
-	}
-}
-#endif
 
 /*
  *
@@ -1950,21 +1845,23 @@ static void udc_handle_dev(struct lpc32xx_udc *udc) {
 	}
 	else if (tmp & DEV_SUS_CH) {
 		if (tmp & DEV_SUS) {
-			if (udc->vbus == 0) {
+			if (udc->vbus == 0)
 				stop_activity(udc);
-			} else if ((udc->gadget.speed !=
-						USB_SPEED_UNKNOWN) && udc->driver &&
-					udc->driver->suspend) {
-				udc->driver->suspend(&udc->gadget);
+			else if ((udc->gadget.speed !=
+				USB_SPEED_UNKNOWN) && udc->driver) {
+				/* Power down transceiver */
+				udc->poweron = 0;
+				schedule_work(&udc->pullup_wq);
 				uda_resm_susp_event(udc, 1);
 			}
 		}
 		else {
 			if ((udc->gadget.speed != USB_SPEED_UNKNOWN) &&
-					udc->driver && udc->driver->resume &&
-					udc->vbus) {
-				udc->driver->resume(&udc->gadget);
+				udc->driver && udc->vbus) {
 				uda_resm_susp_event(udc, 0);
+				/* Power up transceiver */
+				udc->poweron = 1;
+				schedule_work(&udc->pullup_wq);
 			}
 		}
 	}
@@ -2125,7 +2022,7 @@ static void udc_handle_ep0_setup(struct lpc32xx_udc *udc) {
 	/* Get setup packet */
 	bytes = udc_read_hwep(udc, EP_OUT, (u32 *) &ctrlpkt, 8);
 	if (bytes != 8) {
-		ep_dbg(ep0, "Incorrectly sized setup packet (s/b 8, is %d!\n", bytes);
+		ep_warn(ep0, "Incorrectly sized setup packet (s/b 8, is %d!\n", bytes);
 		return;
 	}
 
@@ -2205,6 +2102,7 @@ static void udc_handle_ep0_setup(struct lpc32xx_udc *udc) {
 		/* device-2-host (IN) or no data setup command, process immediately */
 		spin_unlock(&udc->lock);
 		i = udc->driver->setup(&udc->gadget, &ctrlpkt);
+
 		spin_lock(&udc->lock);
 		if (req == USB_REQ_SET_CONFIGURATION) {
 			/* Configuration is set after endpoints are realized */
@@ -2216,11 +2114,7 @@ static void udc_handle_ep0_setup(struct lpc32xx_udc *udc) {
 				   driver, but if you really want them for statistic
 				   purposes, uncomment the following lines */
 				udc_protocol_cmd_data_w(udc, CMD_SET_MODE, DAT_WR_BYTE(AP_CLK |
-#if defined(UDC_ENABLE_DMA)
 							INAK_BI | INAK_II));
-#else
-				INAK_BO | INAK_BI | INAK_IO | INAK_II));
-#endif
 			}
 			else {
 				/* Clear configuration */
@@ -2298,6 +2192,7 @@ static void udc_handle_ep0_out(struct lpc32xx_udc *udc) {
 	/* Clear EP interrupt */
 	epstatus = udc_clearep_getsts(udc, EP_OUT);
 
+
 #ifdef CONFIG_USB_GADGET_DEBUG_FILES
 	ep0->totalints++;
 #endif
@@ -2340,14 +2235,23 @@ static void udc_handle_ep0_out(struct lpc32xx_udc *udc) {
 	}
 }
 
+/* Must be called without lock */
 static int lpc32xx_get_frame(struct usb_gadget *gadget)
 {
+	int frame;
+	unsigned long flags;
 	struct lpc32xx_udc *udc = to_udc(gadget);
 
-	if (!to_udc(gadget)->clocked)
+	if (!udc->clocked)
 		return -EINVAL;
 
-	return (int) udc_get_current_frame(udc);
+	spin_lock_irqsave(&udc->lock, flags);
+
+	frame = (int) udc_get_current_frame(udc);
+
+	spin_unlock_irqrestore(&udc->lock, flags);
+
+	return frame;
 }
 
 static int lpc32xx_wakeup(struct usb_gadget *gadget)
@@ -2366,20 +2270,48 @@ static int lpc32xx_set_selfpowered(struct usb_gadget *gadget, int is_on)
 	return -ENOTSUPP;
 }
 
-/* vbus is here!  turn everything on that's ready */
+/*
+ * vbus is here!  turn everything on that's ready
+ * Must be called without lock
+ */
 static int lpc32xx_vbus_session(struct usb_gadget *gadget, int is_active)
 {
+	unsigned long flags;
 	struct lpc32xx_udc *udc = to_udc(gadget);
 
+	spin_lock_irqsave(&udc->lock, flags);
+
 	/* Doesn't need lock */
-	if (udc->driver)
+	if (udc->driver) {
+		udc_clk_set(udc, 1);
+		udc_enable(udc);
 		pullup(udc, is_active);
-	else
+	}
+	else {
+		stop_activity(udc);
 		pullup(udc, 0);
+
+		spin_unlock_irqrestore(&udc->lock, flags);
+                /*
+		 *  Wait for all the endpoints to disable,
+		 *  before disabling clocks. Don't wait if
+		 *  endpoints are not enabled.
+		 */
+		if(atomic_read(&udc->enabled_ep_cnt))
+			wait_event_interruptible(udc->ep_disable_wait_queue,
+					(atomic_read(&udc->enabled_ep_cnt) == 0));
+
+		spin_lock_irqsave(&udc->lock, flags);
+
+		udc_clk_set(udc, 0);
+	}
+
+	spin_unlock_irqrestore(&udc->lock, flags);
 
 	return 0;
 }
 
+/* Can be called with or without lock */
 static int lpc32xx_pullup(struct usb_gadget *gadget, int is_on)
 {
 	struct lpc32xx_udc *udc = to_udc(gadget);
@@ -2446,7 +2378,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 64,
 		.hwep_num_base	= 4,
 		.hwep_num	= 0, /* 4 or 5, will be set later */
-		.doublebuff	= 1,
 		.lep		= 2,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2459,7 +2390,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 1023,
 		.hwep_num_base	= 6,
 		.hwep_num	= 0, /* 6 or 7, will be set later */
-		.doublebuff	= 1,
 		.lep		= 3,
 		.eptype		= EP_ISO_TYPE,
 	},
@@ -2484,7 +2414,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 64,
 		.hwep_num_base	= 10,
 		.hwep_num	= 0, /* 10 or 11, will be set later */
-		.doublebuff	= 1,
 		.lep		= 5,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2497,7 +2426,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 1023,
 		.hwep_num_base	= 12,
 		.hwep_num	= 0, /* 12 or 13, will be set later */
-		.doublebuff	= 1,
 		.lep		= 6,
 		.eptype		= EP_ISO_TYPE,
 	},
@@ -2522,7 +2450,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 64,
 		.hwep_num_base	= 16,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 8,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2535,7 +2462,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 1023,
 		.hwep_num_base	= 18,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 9,
 		.eptype		= EP_ISO_TYPE,
 	},
@@ -2560,7 +2486,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 64,
 		.hwep_num_base	= 22,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 11,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2573,7 +2498,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 1023,
 		.hwep_num_base	= 24,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 12,
 		.eptype		= EP_ISO_TYPE,
 	},
@@ -2598,7 +2522,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 64,
 		.hwep_num_base	= 28,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 14,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2611,7 +2534,6 @@ static struct lpc32xx_udc controller = {
 		.maxpacket	= 1023,
 		.hwep_num_base	= 30,
 		.hwep_num	= 0,
-		.doublebuff	= 1,
 		.lep		= 15,
 		.eptype		= EP_BLK_TYPE,
 	},
@@ -2626,6 +2548,7 @@ static irqreturn_t lpc32xx_usb_lp_irq(int irq, void *_udc) {
 
 	/* Read the device status register */
 	devstat = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
+
 	devstat &= ~USBD_EP_FAST;
 	__raw_writel(devstat, USBD_DEVINTCLR(udc->udp_baseaddr));
 	devstat = devstat & udc->enabled_devints;
@@ -2639,20 +2562,21 @@ static irqreturn_t lpc32xx_usb_lp_irq(int irq, void *_udc) {
 	if (devstat & FRAME_INT) {
 		/* The frame interrupt isn't really needed for ISO support,
 		   as the driver will queue the necessary packets */
-		dev_dbg(udc->dev, "Device frame interrupt not supported\n");
 	}
 
 	/* Error? */
 	if (devstat & ERR_INT) {
 		/* All types of errors, from cable removal during transfer to
 		   misc protocol and bit errors. These are mostly for just info,
-		   as the USB hardware will work around these */
+		   as the USB hardware will work around these. If these errors
+		   happen alot, something is wrong. */
 		udc_protocol_cmd_w(udc, CMD_RD_ERR_STAT);
 		tmp = udc_protocol_cmd_r(udc, DAT_RD_ERR_STAT);
-		dev_err(udc->dev, "Device error (0x%x)!\n", tmp);
+		dev_dbg(udc->dev, "Device error (0x%x)!\n", tmp);
 	}
 
 	spin_unlock(&udc->lock);
+
 	return IRQ_HANDLED;
 }
 
@@ -2665,7 +2589,6 @@ static irqreturn_t lpc32xx_usb_hp_irq(int irq, void *_udc)
 	spin_lock(&udc->lock);
 
 	/* Read the device status register */
-	tmp = __raw_readl(USBD_DEVINTST(udc->udp_baseaddr));
 	__raw_writel(USBD_EP_FAST, USBD_DEVINTCLR(udc->udp_baseaddr));
 
 	/* Endpoints */
@@ -2689,15 +2612,12 @@ static irqreturn_t lpc32xx_usb_hp_irq(int irq, void *_udc)
 		/* Handle other EP interrupts */
 		for (i = 1; i < NUM_ENDPOINTS; i++) {
 			if (tmp & (1 << udc->ep [i].hwep_num))
-#if defined(UDC_ENABLE_DMA)
 				udc_handle_eps(udc, &udc->ep[i]);
-#else
-				udc_handle_ep(udc, &udc->ep[i]);
-#endif
 		}
 	}
 
 	spin_unlock(&udc->lock);
+
 	return IRQ_HANDLED;
 }
 
@@ -2705,15 +2625,15 @@ static irqreturn_t lpc32xx_usb_devdma_irq(int irq, void *_udc)
 {
 	struct lpc32xx_udc *udc = _udc;
 
-#if defined(UDC_ENABLE_DMA)
 	int i;
 	u32 tmp;
 
 	spin_lock(&udc->lock);
-
+	
 	/* Handle EP DMA EOT interrupts */
 	tmp = __raw_readl(USBD_EOTINTST(udc->udp_baseaddr)) |
-		__raw_readl(USBD_NDDRTINTST(udc->udp_baseaddr)) |
+		(__raw_readl(USBD_EPDMAST(udc->udp_baseaddr)) &
+		__raw_readl(USBD_NDDRTINTST(udc->udp_baseaddr))) |
 		__raw_readl(USBD_SYSERRTINTST(udc->udp_baseaddr));
 	for (i = 1; i < NUM_ENDPOINTS; i++) {
 		if (tmp & (1 << udc->ep [i].hwep_num))
@@ -2721,7 +2641,6 @@ static irqreturn_t lpc32xx_usb_devdma_irq(int irq, void *_udc)
 	}
 
 	spin_unlock(&udc->lock);
-#endif
 
 	return IRQ_HANDLED;
 }
@@ -2731,69 +2650,52 @@ static irqreturn_t lpc32xx_usb_devdma_irq(int irq, void *_udc)
  * VBUS detection, pullup handler, and Gadget cable state notification
  *
  */
-static int vbus_handler_thread(void *udc_)
+static void vbus_work(struct work_struct *work)
 {
-	struct lpc32xx_udc *udc = udc_;
 	u8 value;
+	struct lpc32xx_udc *udc = container_of(work, struct lpc32xx_udc, vbus_wq);
 
-	/* The main loop */
-	while (!kthread_should_stop()) {
-		if (udc->enabled != 0) {
-			/* Get the VBUS status from the transceiver */
-			value = i2c_read(ISP1301_I2C_OTG_CONTROL_2);
+	if (udc->enabled != 0) {
+		/* Discharge VBUS real quick */
+		i2c_write(OTG1_VBUS_DISCHRG, ISP1301_I2C_OTG_CONTROL_1);
 
-			/* VBUS on or off? */
-			if (value & OTG_B_SESS_VLD) {
-				udc->vbus = 1;
+		/* Give VBUS some time (100mS) to discharge */
+		msleep(100);
 
-				/* Enable USB clocks */
-				udc_clk_set(udc, 1);
+		/* Disable VBUS discharge resistor */
+		i2c_write(OTG1_VBUS_DISCHRG,
+			(ISP1301_I2C_OTG_CONTROL_1 | ISP1301_I2C_REG_CLEAR_ADDR));
 
-				/* Setup the UDC and ep0 */
-				udc_enable(udc);
-			}
-			else {
-				/* Will force disconnect */
-				udc->vbus = 0;
-			}
+		/* Clear interrupt */
+		i2c_write(~0, ISP1301_I2C_INTERRUPT_LATCH | ISP1301_I2C_REG_CLEAR_ADDR);
 
-			/* VBUS changed? */
-			if (udc->last_vbus != udc->vbus) {
-				lpc32xx_vbus_session(&udc->gadget, udc->vbus);
-				udc->last_vbus = udc->vbus;
-			}
+		/* Get the VBUS status from the transceiver */
+		value = i2c_read(ISP1301_I2C_OTG_CONTROL_2);
+
+		/* VBUS on or off? */
+		if (value & OTG_B_SESS_VLD)
+			udc->vbus = 1;
+		else
+			udc->vbus = 0;
+
+		/* VBUS changed? */
+		if (udc->last_vbus != udc->vbus) {
+			udc->last_vbus = udc->vbus;
+			lpc32xx_vbus_session(&udc->gadget, udc->vbus);
 		}
-
-		/* sleep if nothing to send */
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule();
 	}
 
-	udc->thread_task = NULL;
-
-	return 0;
+	/* Re-enable after completion */
+	enable_irq(udc->udp_irq[IRQ_USB_ATX]);
 }
 
 static irqreturn_t lpc32xx_usb_vbus_irq(int irq, void *_udc)
 {
 	struct lpc32xx_udc *udc = _udc;
 
-	/* Discharge VBUS real quick */
-	i2c_write(OTG1_VBUS_DISCHRG, ISP1301_I2C_OTG_CONTROL_1);
-	
-	/* Give VBUS some time (100mS) to discharge */
-	msleep(100);
-
-	/* Disable VBUS discharge resistor */
-	i2c_write(OTG1_VBUS_DISCHRG,
-			(ISP1301_I2C_OTG_CONTROL_1 | ISP1301_I2C_REG_CLEAR_ADDR));
-	
-	/* Clear interrupt */
-	i2c_write(~0, ISP1301_I2C_INTERRUPT_LATCH | ISP1301_I2C_REG_CLEAR_ADDR);
-	
-	/* Kick off the VBUS handler thread */
-	udc->thread_wakeup_needed = 1;
-	wake_up_process(udc->thread_task);
+	/* Defer handling of VBUS IRQ to work queue */
+	disable_irq_nosync(udc->udp_irq[IRQ_USB_ATX]);
+	schedule_work(&udc->vbus_wq);
 
 	return IRQ_HANDLED;
 }
@@ -2801,7 +2703,7 @@ static irqreturn_t lpc32xx_usb_vbus_irq(int irq, void *_udc)
 int usb_gadget_register_driver (struct usb_gadget_driver *driver)
 {
 	struct lpc32xx_udc *udc = &controller;
-	int retval;
+	int retval, i;
 
 	if (!driver || driver->speed < USB_SPEED_FULL ||
 			!driver->bind || !driver->setup) {
@@ -2834,8 +2736,11 @@ int usb_gadget_register_driver (struct usb_gadget_driver *driver)
 
 	/* Force VBUS process once to check for cable insertion */
 	udc->last_vbus = udc->vbus = 0;
-	wake_up_process(udc->thread_task);
-	enable_irq(udc->udp_irq[IRQ_USB_ATX]);
+	schedule_work(&udc->vbus_wq);
+
+	/* Do not re-enable ATX IRQ (3) */
+	for (i = IRQ_USB_LP; i < IRQ_USB_ATX; i++)
+		enable_irq(udc->udp_irq[i]);
 
 	return 0;
 }
@@ -2843,16 +2748,40 @@ EXPORT_SYMBOL (usb_gadget_register_driver);
 
 int usb_gadget_unregister_driver (struct usb_gadget_driver *driver)
 {
+	int i;
 	struct lpc32xx_udc *udc = &controller;
 
 	if (!driver || driver != udc->driver || !driver->unbind)
 		return -EINVAL;
 
-	disable_irq(udc->udp_irq[IRQ_USB_ATX]);
-	local_irq_disable();
+	/* Disable USB pullup */
+	isp1301_pullup_enable(udc, 0, 1);
+
+	for (i = IRQ_USB_LP; i <= IRQ_USB_ATX; i++)
+		disable_irq(udc->udp_irq[i]);
+
+	if (udc->clocked) {
+
+		spin_lock(&udc->lock);
+		stop_activity(udc);
+		spin_unlock(&udc->lock);
+
+                /*
+		 *  Wait for all the endpoints to disable,
+		 *  before disabling clocks. Don't wait if
+		 *  endpoints are not enabled.
+		 */
+		if(atomic_read(&udc->enabled_ep_cnt))
+			wait_event_interruptible(udc->ep_disable_wait_queue,
+					(atomic_read(&udc->enabled_ep_cnt) == 0));
+
+		spin_lock(&udc->lock);
+		udc_clk_set(udc, 0);
+		spin_unlock(&udc->lock);
+	}
+
 	udc->enabled = 0;
 	pullup(udc, 0);
-	local_irq_enable();
 
 	driver->unbind(&udc->gadget);
 	udc->gadget.dev.driver = NULL;
@@ -2978,9 +2907,20 @@ static int __init lpc32xx_udc_probe(struct platform_device *pdev)
 	/* Set to enable all needed USB OTG clocks */
 	__raw_writel(USB_CLOCK_MASK, USB_OTG_CLK_CTRL);
 
-	/* This is unsafe */
-	while ((__raw_readl(USB_OTG_CLK_STAT) & USB_CLOCK_MASK) !=
-			USB_CLOCK_MASK);
+	i = 1000;
+	while (((__raw_readl(USB_OTG_CLK_STAT) & USB_CLOCK_MASK) !=
+			USB_CLOCK_MASK) && (i > 0))
+		i--;
+	if (!i)
+		dev_dbg(udc->dev, "USB OTG clocks not correctly enabled\n");
+
+	/* Setup deferred workqueue data */
+	udc->poweron = udc->pullup = 0;
+	INIT_WORK(&udc->pullup_wq, pullup_work);
+	INIT_WORK(&udc->vbus_wq, vbus_work);
+#ifdef CONFIG_PM
+	INIT_WORK(&udc->power_wq, power_work);
+#endif
 
 	/* All clocks are now on */
 	udc->clocked = 1;
@@ -3065,20 +3005,10 @@ static int __init lpc32xx_udc_probe(struct platform_device *pdev)
 		goto irq_dev_fail;
 	}
 
-	/* Create VBUS handler thread */
-	udc->thread_wakeup_needed = 0;
-	udc->thread_task = kthread_create(vbus_handler_thread, udc,
-			"vbus_handler_thread");
-	if (IS_ERR(udc->thread_task)) {
-		retval = PTR_ERR(udc->thread_task);
-		dev_err(udc->dev, "VBUS handler thread failures");
-		goto vbus_thread_fail;
-	}
-
 	/* The transceiver interrupt is used for VBUS detection and will
-	   kick off the VBUS handler thread */
-	retval = request_threaded_irq(udc->udp_irq[IRQ_USB_ATX], NULL, lpc32xx_usb_vbus_irq,
-				 IRQF_ONESHOT, "udc_otg", udc);
+	   kick off the VBUS handler function */
+	retval = request_irq(udc->udp_irq[IRQ_USB_ATX], lpc32xx_usb_vbus_irq,
+				 0, "udc_otg", udc);
 	if (retval < 0) {
 		dev_err(udc->dev, "VBUS request irq %d failed\n", udc->udp_irq[IRQ_USB_ATX]);
 		goto irq_xcvr_fail;
@@ -3088,8 +3018,9 @@ static int __init lpc32xx_udc_probe(struct platform_device *pdev)
         init_waitqueue_head(&udc->ep_disable_wait_queue);
         atomic_set(&udc->enabled_ep_cnt,0);
 
-	/* Keep VBUS IRQ disabled until GadgetFS starts up */
-	disable_irq(udc->udp_irq[IRQ_USB_ATX]);
+	/* Keep all IRQs disabled until GadgetFS starts up */
+	for (i = IRQ_USB_LP; i <= IRQ_USB_ATX; i++)
+		disable_irq(udc->udp_irq[i]);
 
 	dev_set_drvdata(dev, udc);
 	device_init_wakeup(dev, 1);
@@ -3102,8 +3033,6 @@ static int __init lpc32xx_udc_probe(struct platform_device *pdev)
 	return 0;
 
 irq_xcvr_fail:
-	kthread_stop(udc->thread_task);
-vbus_thread_fail:
 	free_irq(udc->udp_irq[IRQ_USB_DEVDMA], udc);
 irq_dev_fail:
 	free_irq(udc->udp_irq[IRQ_USB_HP], udc);
@@ -3158,7 +3087,6 @@ static int __exit lpc32xx_udc_remove(struct platform_device *pdev)
 	dma_pool_destroy(udc->dd_cache);
 	dma_free_coherent(&pdev->dev, UDCA_BUFF_SIZE,
 			udc->udca_v_base, (dma_addr_t) udc->udca_p_base);
-	kthread_stop(udc->thread_task);
 	free_irq(udc->udp_irq[IRQ_USB_DEVDMA], udc);
 	free_irq(udc->udp_irq[IRQ_USB_HP], udc);
 	free_irq(udc->udp_irq[IRQ_USB_LP], udc);
@@ -3181,10 +3109,12 @@ static int __exit lpc32xx_udc_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int lpc32xx_udc_suspend(struct platform_device *pdev, pm_message_t mesg)
 {
+	int to = 1000;
 	struct lpc32xx_udc *udc = platform_get_drvdata(pdev);
 
 	if (udc->clocked) {
 		/* Power down ISP */
+		udc->poweron = 0;
 		isp1301_set_powerstate(0);
 
 		/* Disable clocking */
@@ -3196,8 +3126,11 @@ static int lpc32xx_udc_suspend(struct platform_device *pdev, pm_message_t mesg)
 
 		/* Kill OTG and I2C clocks */
 		__raw_writel(0, USB_OTG_CLK_CTRL);
-		while ((__raw_readl(USB_OTG_CLK_STAT) & OTGOFF_CLK_MASK) !=
-				OTGOFF_CLK_MASK);
+		while (((__raw_readl(USB_OTG_CLK_STAT) & OTGOFF_CLK_MASK) !=
+				OTGOFF_CLK_MASK) && (to > 0))
+			to--;
+		if (!to)
+			dev_dbg(udc->dev, "USB OTG clocks not correctly enabled\n");
 
 		/* Kill global USB clock */
 		clk_disable(udc->usb_slv_clk);
@@ -3218,6 +3151,7 @@ static int lpc32xx_udc_resume(struct platform_device *pdev)
 		udc_clk_set(udc, 1);
 
 		/* ISP back to normal power mode */
+		udc->poweron = 1;
 		isp1301_set_powerstate(1);
 	}
 

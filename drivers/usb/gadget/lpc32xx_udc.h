@@ -24,13 +24,6 @@
 #define LPC32XX_UDC_H
 
 /*
- * Although the driver supports DMA, it is not yet working completely. It
- * seems to work ok for serial ACM, but eventually bonks out for MSC and
- * ether classes. Disabling this define will use FIFO mode for all EPs
- */
-#define UDC_ENABLE_DMA
-
-/*
  * controller driver data structures
  */
 
@@ -60,7 +53,6 @@
 #define WAIT_FOR_SETUP 0 /* Wait for setup packet */
 #define DATA_IN        1 /* Expect dev->host transfer */
 #define DATA_OUT       2 /* Expect host->dev transfer */
-#define WAIT_OUT       3 /* ??? */
 
 /* DD (DMA Descriptor) structure, requires word alignment, this is already defined
    in the LPC32XX USB device header file, but this version si slightly modified to
@@ -74,7 +66,7 @@ struct lpc32xx_usbd_dd_gad
 	u32 dd_status;
 	u32 *dd_iso_ps_mem_addr;
 	dma_addr_t this_dma;
-	u32 iso_status[5];
+	u32 iso_status[6]; /* 5 spare */
 	struct lpc32xx_usbd_dd_gad *dd_next_v;
 };
 
@@ -89,18 +81,13 @@ struct lpc32xx_ep {
 	u32			hwep_num_base; /* Physical hardware EP */
 	u32			hwep_num; /* Maps to hardware endpoint */
 	u32			maxpacket;
-	u32			doublebuff;
 	u32			lep;
 
 	u32			is_in:1;
-	u32			uses_dma:1;
 	volatile u32		req_pending:1;
 	u32			eptype;
 
-	/* Statuses for proc, NAK and stall aren't used */
 	u32                     totalints;
-	u32			totalnaks;
-	u32			totalstalls;
 
 	const struct usb_endpoint_descriptor *desc;
 };
@@ -136,12 +123,16 @@ struct lpc32xx_udc {
 	u32			dev_status;
 	u32			realized_eps;
 
-	/* VBUS thread support */
-	struct task_struct	*thread_task;
-	volatile int 		thread_wakeup_needed;
+	/* VBUS detection, pullup, and power flags */
 	u8			vbus;
 	u8			last_vbus;
-	volatile int		irq_asrtd;
+	int			pullup;
+	int			poweron;
+
+	/* Work queues related to I2C support */
+	struct work_struct	pullup_wq;
+	struct work_struct	vbus_wq;
+	struct work_struct	power_wq;
 
 	/* USB device peripheral - various */
 	struct lpc32xx_ep	ep[NUM_ENDPOINTS];
