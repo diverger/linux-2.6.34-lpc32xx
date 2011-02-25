@@ -51,6 +51,8 @@
 
 #define NAND_ERASED_BLOCK_ECC_VALUE	0xFFFFFFFF
 
+#define LPC32XX_DEF_BUS_RATE 133250000
+
 /*
  * NAND ECC Layout for Small page flashes
  * NOTE: For large page devices, default layout is used
@@ -72,30 +74,30 @@ struct lpc32xx_nand_host {
 	void __iomem		*io_base;
 	struct lpc32XX_nand_cfg	*ncfg;
 	struct completion       comp;
-	struct dma_config dmacfg;
-	int dmach;
-	uint32_t dma_xfer_status;
-	uint32_t llptr;
-	uint32_t dma_buf_len;
+	struct dma_config	dmacfg;
+	int			dmach;
+	uint32_t		dma_xfer_status;
+	uint32_t		llptr;
+	uint32_t		dma_buf_len;
 	/*
 	 * Physical addresses of ECC buffer,DMA data buffers,OOB data buffer
 	 */
-	dma_addr_t oob_buf_phy;
-	dma_addr_t ecc_calc_buf_phy;
-	dma_addr_t dma_buf_phy;
+	dma_addr_t		oob_buf_phy;
+	dma_addr_t		ecc_calc_buf_phy;
+	dma_addr_t		dma_buf_phy;
 	/*
 	 * Virtual addresses of ECC buffer,DMA data buffers,OOB data buffer
 	 */
-	uint8_t *oob_buf;
-	uint32_t *ecc_calc_buf;
-	uint8_t * dma_buf;
+	uint8_t			*oob_buf;
+	uint32_t		*ecc_calc_buf;
+	uint8_t			*dma_buf;
 	/* Physical address of DMA base address */
-	dma_addr_t io_base_phy;
-	uint8_t *erase_buf_data;
+	dma_addr_t		io_base_phy;
+	uint8_t			*erase_buf_data;
 };
 
 #ifdef CONFIG_MTD_PARTITIONS
-const char *part_probes[] = { "cmdlinepart", NULL };
+static const char *part_probes[] = { "cmdlinepart", NULL };
 #endif
 
 static void lpc32xx_nand_setup(struct lpc32xx_nand_host *host)
@@ -109,12 +111,13 @@ static void lpc32xx_nand_setup(struct lpc32xx_nand_host *host)
 	/* Basic setup */
 	__raw_writel(0, SLC_CFG(host->io_base));
 	__raw_writel(0, SLC_IEN(host->io_base));
-	__raw_writel((SLCSTAT_INT_TC | SLCSTAT_INT_RDY_EN), SLC_ICR(host->io_base));
+	__raw_writel((SLCSTAT_INT_TC | SLCSTAT_INT_RDY_EN),
+		SLC_ICR(host->io_base));
 
 	/* Get base clock for SLC block */
 	clkrate = clk_get_rate(host->clk);
 	if (clkrate == 0)
-		clkrate = 133000000;
+		clkrate = LPC32XX_DEF_BUS_RATE;
 
 	/* Compute clock setup values */
 	tmp = SLCTAC_WDR(host->ncfg->wdr_clks) |
@@ -131,7 +134,8 @@ static void lpc32xx_nand_setup(struct lpc32xx_nand_host *host)
 /*
  * Hardware specific access to control lines
  */
-static void lpc32xx_nand_cmd_ctrl(struct mtd_info *mtd, int cmd, unsigned int ctrl)
+static void lpc32xx_nand_cmd_ctrl(struct mtd_info *mtd, int cmd,
+	unsigned int ctrl)
 {
 	u32 tmp;
 	struct nand_chip *nand_chip = mtd->priv;
@@ -202,7 +206,8 @@ static uint8_t lpc32xx_read_byte(struct mtd_info *mtd)
 /*
  * Verify written data for vaildity
  */
-static int lpc32xx_verify_buf(struct mtd_info *mtd, const uint8_t *buf, int len)
+static int lpc32xx_verify_buf(struct mtd_info *mtd, const uint8_t *buf,
+	int len)
 {
 	struct nand_chip *nand_chip = mtd->priv;
 	struct lpc32xx_nand_host *host = nand_chip->priv;
@@ -225,7 +230,7 @@ static void lpc3xxx_nand_dma_irq(int channel, int cause,
 	/* Flush DMA link list */
 	lpc32xx_dma_flush_llist(host->dmach);
 
-	host->dma_xfer_status = (cause & DMA_TC_INT)? 0: 1;
+	host->dma_xfer_status = (cause & DMA_TC_INT) ? 0: 1;
 	complete(&host->comp);
 }
 
@@ -233,7 +238,8 @@ static void lpc3xxx_nand_dma_irq(int channel, int cause,
  * Get DMA channel and allocate DMA descriptors memory.
  * Prepare DMA descriptors link lists
  */
-static int lpc32xx_nand_dma_setup(struct lpc32xx_nand_host *host, int num_entries)
+static int lpc32xx_nand_dma_setup(struct lpc32xx_nand_host *host,
+	int num_entries)
 {
 	int ret = 0;
 
@@ -258,7 +264,7 @@ static int lpc32xx_nand_dma_setup(struct lpc32xx_nand_host *host, int num_entrie
 	host->dmacfg.dst_prph = DMAC_DEST_PERIP(DMA_PERID_NAND1);
 	host->dmacfg.flowctrl = DMAC_CHAN_FLOW_D_M2P;
 	if (lpc32xx_dma_ch_get(&host->dmacfg, "dma_slcnand",
-				&lpc3xxx_nand_dma_irq, host) < 0) {
+		&lpc3xxx_nand_dma_irq, host) < 0) {
 		printk(KERN_ERR "Error setting up SLC NAND DMA channel\n");
 		ret = -ENODEV;
 		goto dma_ch_err;
@@ -266,14 +272,15 @@ static int lpc32xx_nand_dma_setup(struct lpc32xx_nand_host *host, int num_entrie
 
 	/*
 	 * Allocate Linked list of total DMA Descriptors.
-	 * For Large Block: 17 descriptors = ((16 Data and ECC Read) + 1 Spare Area)
-	 * For Small Block: 5 descriptors = ((4 Data and ECC Read) + 1 Spare Area)
+	 * Large Block: 17 descriptors = ((16 Data and ECC) + 1 Spare Area)
+	 * Small Block: 5 descriptors = ((4 Data and ECC) + 1 Spare Area)
 	 */
 	host->llptr = lpc32xx_dma_alloc_llist(host->dmach, num_entries);
 	if (host->llptr == 0) {
 		lpc32xx_dma_ch_put(host->dmach);
 		host->dmach = -1;
-		printk(KERN_ERR "Error allocating list buffer for SLC NAND\n");
+		printk(KERN_ERR
+			"Error allocating list buffer for SLC NAND\n");
 		ret = -ENOMEM;
 		goto dma_alloc_err;
 	}
@@ -301,15 +308,15 @@ static void lpc32xx_nand_dma_configure(struct mtd_info *mtd,
 	 * CTRL descriptor entry for reading ECC
 	 * Copy Multiple times to sync DMA with Flash Controller
 	 */
-	ecc_ctrl =  (0x5 |
-			DMAC_CHAN_SRC_BURST_1 |
-			DMAC_CHAN_DEST_BURST_1 |
-			DMAC_CHAN_SRC_WIDTH_32 |
-			DMAC_CHAN_DEST_WIDTH_32 |
-			DMAC_CHAN_DEST_AHB1);
+	ecc_ctrl = 0x5 |
+		DMAC_CHAN_SRC_BURST_1 |
+		DMAC_CHAN_DEST_BURST_1 |
+		DMAC_CHAN_SRC_WIDTH_32 |
+		DMAC_CHAN_DEST_WIDTH_32 |
+		DMAC_CHAN_DEST_AHB1;
 
 	/* CTRL descriptor entry for reading/writing data */
-	ctrl =     ((mtd->writesize / page_divider) / 4) |
+	ctrl = (mtd->writesize / page_divider) / 4 |
 		DMAC_CHAN_SRC_BURST_4 |
 		DMAC_CHAN_DEST_BURST_4 |
 		DMAC_CHAN_SRC_WIDTH_32 |
@@ -317,21 +324,21 @@ static void lpc32xx_nand_dma_configure(struct mtd_info *mtd,
 		DMAC_CHAN_DEST_AHB1;
 
 	/* CTRL descriptor entry for reading/writing Spare Area */
-	oob_ctrl =  ((mtd->oobsize / 4) |
-	                DMAC_CHAN_SRC_BURST_4 |
-	                DMAC_CHAN_DEST_BURST_4 |
-	                DMAC_CHAN_SRC_WIDTH_32 |
-	                DMAC_CHAN_DEST_WIDTH_32 |
-	                DMAC_CHAN_DEST_AHB1);
+	oob_ctrl = (mtd->oobsize / 4) |
+		DMAC_CHAN_SRC_BURST_4 |
+		DMAC_CHAN_DEST_BURST_4 |
+		DMAC_CHAN_SRC_WIDTH_32 |
+		DMAC_CHAN_DEST_WIDTH_32 |
+		DMAC_CHAN_DEST_AHB1;
 
 	if (read) {
-	        dmasrc = (uint32_t) SLC_DMA_DATA(host->io_base_phy);
-	        dmadst = (uint32_t) (buffer);
-	        ctrl |= DMAC_CHAN_DEST_AUTOINC;
+		dmasrc = (uint32_t)SLC_DMA_DATA(host->io_base_phy);
+		dmadst = (uint32_t)(buffer);
+		ctrl |= DMAC_CHAN_DEST_AUTOINC;
 	} else {
-	        dmadst = (uint32_t) SLC_DMA_DATA(host->io_base_phy);
-	        dmasrc = (uint32_t) (buffer);
-	        ctrl |= DMAC_CHAN_SRC_AUTOINC;
+		dmadst = (uint32_t)SLC_DMA_DATA(host->io_base_phy);
+		dmasrc = (uint32_t)(buffer);
+		ctrl |= DMAC_CHAN_SRC_AUTOINC;
 	}
 
 	/*
@@ -365,36 +372,37 @@ static void lpc32xx_nand_dma_configure(struct mtd_info *mtd,
 	 * data & 32 bytes of ECC data.
 	 * 2. X'fer 64 bytes of Spare area from Flash to Memory.
 	 */
-	for (i = 0; i < size/256; i++) {
+	for (i = 0; i < size / 256; i++) {
 		lpc32xx_dma_queue_llist(host->dmach,
-				(void *)(read ?(dmasrc) :(dmasrc + (i*256))),
-				(void *)(read ?(dmadst + (i*256)) :dmadst),
-				-1, ctrl);
+			(void *)(read ?(dmasrc) :(dmasrc + (i * 256))),
+			(void *)(read ?(dmadst + (i * 256)) :dmadst),
+			-1, ctrl);
+		if (i + 1 == size / 256)
+			ecc_ctrl |= DMAC_CHAN_INT_TC_EN;
 		lpc32xx_dma_queue_llist(host->dmach,
-				(void *)SLC_ECC(host->io_base_phy),
-				(void *)((uint32_t) host->ecc_calc_buf_phy + (i*4)),
-				-1, ecc_ctrl | (i+1 == size/256 ? DMAC_CHAN_INT_TC_EN : 0));
+			(void *)SLC_ECC(host->io_base_phy),
+			(void *)((uint32_t) host->ecc_calc_buf_phy + (i * 4)),
+			-1, ecc_ctrl);
 	}
 
-	if (i) {
-		/* Data only transfer */
+	/* Data only transfer? */
+	if (i)
 		return ;
-	}
 
 	/* OOB only transfer */
 	if (read) {
-	        dmasrc = (uint32_t) SLC_DMA_DATA(host->io_base_phy);
-	        dmadst = (uint32_t) (buffer);
+	        dmasrc = (uint32_t)SLC_DMA_DATA(host->io_base_phy);
+	        dmadst = (uint32_t)(buffer);
 	        oob_ctrl |= DMAC_CHAN_DEST_AUTOINC;
 	} else {
-	        dmadst = (uint32_t) SLC_DMA_DATA(host->io_base_phy);
-	        dmasrc = (uint32_t) (buffer);
+	        dmadst = (uint32_t)SLC_DMA_DATA(host->io_base_phy);
+	        dmasrc = (uint32_t)(buffer);
 	        oob_ctrl |= DMAC_CHAN_SRC_AUTOINC;
 	}
 
 	/* Read/ Write Spare Area Data To/From Flash */
-	lpc32xx_dma_queue_llist(host->dmach, (void *)dmasrc, (void *)dmadst, -1,
-			oob_ctrl | DMAC_CHAN_INT_TC_EN);
+	lpc32xx_dma_queue_llist(host->dmach, (void *) dmasrc, (void *) dmadst,
+		-1, oob_ctrl | DMAC_CHAN_INT_TC_EN);
 }
 
 /*
@@ -415,7 +423,8 @@ static int is_xfer_pending(struct mtd_info *mtd)
  * mem to NAND), if not 0 then the transfer is a read transfer
  * (data transfered from NAND device to memory)
  */
-static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len, int read)
+static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len,
+	int read)
 {
 	struct nand_chip *this = mtd->priv;
 	uint32_t config;
@@ -426,8 +435,8 @@ static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len, in
 	/* Calculate the physical address of the Buffer */
 	/* Check if memory not allocated by vmalloc */
 	if (likely((void *) buf < high_memory)) {
-		buf_phy = dma_map_single(mtd->dev.parent,
-				buf, len, read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+		buf_phy = dma_map_single(mtd->dev.parent, buf, len,
+			read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 		if (unlikely(dma_mapping_error(mtd->dev.parent, buf_phy))) {
 			dev_err(mtd->dev.parent, "Unable to DMA map a buffer "
 					"of size %d\r\n", len);
@@ -442,22 +451,25 @@ static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len, in
 		buf_phy = host->dma_buf_phy;
 	}
 
-	config = DMAC_CHAN_ITC | DMAC_CHAN_IE |
-		(read ? DMAC_CHAN_FLOW_D_P2M : DMAC_CHAN_FLOW_D_M2P) |
-		(read ? DMAC_DEST_PERIP(0) : DMAC_DEST_PERIP(DMA_PERID_NAND1)) |
-		(read ? DMAC_SRC_PERIP(DMA_PERID_NAND1) : DMAC_SRC_PERIP(0)) |
-		DMAC_CHAN_ENABLE;
+	if (read)
+		config = DMAC_CHAN_ITC | DMAC_CHAN_IE | DMAC_CHAN_FLOW_D_P2M |
+			DMAC_DEST_PERIP (0) |
+			DMAC_SRC_PERIP(DMA_PERID_NAND1) | DMAC_CHAN_ENABLE;
+	else
+		config = DMAC_CHAN_ITC | DMAC_CHAN_IE | DMAC_CHAN_FLOW_D_M2P |
+			DMAC_DEST_PERIP(DMA_PERID_NAND1) |
+			DMAC_SRC_PERIP (0) | DMAC_CHAN_ENABLE;
 
 	/* Prepare descriptors for read transfer */
 	lpc32xx_nand_dma_configure(mtd, buf_phy, len, read);
 
 	/* Setup SLC controller and start transfer */
 	if (read)
-		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) | SLCCFG_DMA_DIR,
-			SLC_CFG(host->io_base));
+		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) |
+			SLCCFG_DMA_DIR, SLC_CFG(host->io_base));
 	else  /* NAND_ECC_WRITE */
-		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) & ~SLCCFG_DMA_DIR,
-			SLC_CFG(host->io_base));
+		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) &
+			~SLCCFG_DMA_DIR, SLC_CFG(host->io_base));
 	__raw_writel(__raw_readl(SLC_CFG(host->io_base)) | SLCCFG_DMA_BURST,
 		SLC_CFG(host->io_base));
 
@@ -468,7 +480,7 @@ static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len, in
 			SLC_TC(host->io_base));
 
 	__raw_writel(__raw_readl(SLC_CTRL(host->io_base)) | SLCCTRL_DMA_START,
-			SLC_CTRL(host->io_base));
+		SLC_CTRL(host->io_base));
 
 	/* This should start the DMA transfers */
 	lpc32xx_dma_start_xfer(host->dmach, config);
@@ -485,15 +497,15 @@ static void lpc32xx_nand_dma_xfer(struct mtd_info *mtd, u_char *buf, int len, in
 
 	if (dma_mapped)
 		dma_unmap_single(mtd->dev.parent, buf_phy, len,
-				read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
+			read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 
 	/* Stop DMA & HW ECC */
-	__raw_writel(__raw_readl(SLC_CTRL(host->io_base)) & ~SLCCTRL_DMA_START,
-			SLC_CTRL(host->io_base));
+	__raw_writel(__raw_readl(SLC_CTRL(host->io_base)) &
+		~SLCCTRL_DMA_START, SLC_CTRL(host->io_base));
 	__raw_writel( __raw_readl(SLC_CFG(host->io_base)) &
-			~(SLCCFG_DMA_BURST | SLCCFG_ECC_EN |
-			  SLCCFG_DMA_ECC | SLCCFG_DMA_DIR),
-			SLC_CFG(host->io_base));
+		~(SLCCFG_DMA_BURST | SLCCFG_ECC_EN |
+		  SLCCFG_DMA_ECC | SLCCFG_DMA_DIR),
+		SLC_CFG(host->io_base));
 }
 
 /* Prepares SLC for transfers with H/W ECC enabled */
@@ -518,13 +530,17 @@ static uint32_t slc_ecc_copy_to_buffer(uint8_t * spare,
 		const uint32_t * ecc, int count)
 {
 	int i;
+
 	for (i = 0; i < (count * 3); i += 3) {
-		uint32_t ce = ecc[i/3];
+		uint32_t ce = ecc[i / 3];
 		ce = ~(ce << 2) & 0xFFFFFF;
-		spare[i+2] = (uint8_t)(ce & 0xFF); ce >>= 8;
-		spare[i+1] = (uint8_t)(ce & 0xFF); ce >>= 8;
-		spare[i]   = (uint8_t)(ce & 0xFF);
+		spare[i + 2] = (uint8_t)(ce & 0xFF);
+		ce >>= 8;
+		spare[i + 1] = (uint8_t)(ce & 0xFF);
+		ce >>= 8;
+		spare[i] = (uint8_t)(ce & 0xFF);
 	}
+
 	return 0;
 }
 
@@ -540,7 +556,8 @@ static int lpc32xx_ecc_calculate(struct mtd_info *mtd, const uint8_t *dat,
 
 
 /* Wrapper function for write operation */
-static void lpc32xx_write_buf(struct mtd_info *mtd, const uint8_t *buf, int len)
+static void lpc32xx_write_buf(struct mtd_info *mtd, const uint8_t *buf,
+	int len)
 {
 	lpc32xx_nand_dma_xfer(mtd, (u_char *)buf, len, 0);
 }
@@ -570,13 +587,15 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	/* Allocate memory for the device structure (and zero it) */
 	host = kzalloc(sizeof(struct lpc32xx_nand_host), GFP_KERNEL);
 	if (!host) {
-		 dev_err(&pdev->dev,"lpc32xx_nand: failed to allocate device structure.\n");
+		 dev_err(&pdev->dev,"lpc32xx_nand: failed to allocate "
+			"device structure.\n");
 		return -ENOMEM;
 	}
 
 	rc = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (rc == NULL) {
-		dev_err(&pdev->dev,"No memory resource found for device!\r\n");
+		dev_err(&pdev->dev,"No memory resource found for"
+			" device!\r\n");
 		res = -ENXIO;
 		goto err_exit1;
 	}
@@ -592,7 +611,7 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	nand_chip = &host->nand_chip;
 	host->ncfg = pdev->dev.platform_data;
 
-	nand_chip->priv = host;		/* link the private data structures */
+	nand_chip->priv = host;
 	mtd->priv = nand_chip;
 	mtd->owner = THIS_MODULE;
 	mtd->dev.parent = &pdev->dev;
@@ -611,7 +630,7 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	nand_chip->IO_ADDR_W = SLC_DATA(host->io_base);
 	nand_chip->cmd_ctrl = lpc32xx_nand_cmd_ctrl;
 	nand_chip->dev_ready = lpc32xx_nand_device_ready;
-	nand_chip->chip_delay = 20;		/* 20us command delay time */
+	nand_chip->chip_delay = 20; /* 20us command delay time */
 
 	/* Init NAND controller */
 	lpc32xx_nand_setup(host);
@@ -644,9 +663,8 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	if (mtd->oobsize == 16)
 		nand_chip->ecc.layout = &lpc32xx_nand_oob_16;
 
-
 	/* Get free DMA channel and alloc DMA descriptor link list */
-	res = lpc32xx_nand_dma_setup(host,((mtd->writesize/128) + 1));
+	res = lpc32xx_nand_dma_setup(host,((mtd->writesize / 128) + 1));
 	if(res) {
 		res = -EIO;
 		goto err_exit3;
@@ -655,14 +673,14 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	/* allocate DMA buffer */
 	host->dma_buf_len =
 		(/* OOB size area for storing OOB data including ECC */
-		 mtd->oobsize +
-		 /* Page Size area for storing Page RAW data */
-		 mtd->writesize +
-		 /* ECC bytes area for storing Calculated ECC at the time reading page */
-		 ((mtd->oobsize/16) * 2 * sizeof(uint32_t)));
+		mtd->oobsize +
+		/* Page Size area for storing Page RAW data */
+		mtd->writesize +
+		/* ECC bytes area for storing Calculated ECC at the time reading page */
+		((mtd->oobsize / 16) * 2 * sizeof(uint32_t)));
 
 	host->oob_buf = dmam_alloc_coherent(&pdev->dev, host->dma_buf_len,
-			&host->oob_buf_phy, GFP_KERNEL);
+		&host->oob_buf_phy, GFP_KERNEL);
 	if (host->oob_buf == NULL) {
 		dev_err(&pdev->dev, "Unable to allocate DMA memory!\r\n");
 		res = -ENOMEM;
@@ -675,7 +693,7 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	host->dma_buf_phy = host->oob_buf_phy + mtd->oobsize;
 	host->ecc_calc_buf_phy = host->dma_buf_phy + mtd->writesize;
 
-	host->io_base_phy = platform_get_resource(pdev, IORESOURCE_MEM, 0)->start;
+	host->io_base_phy = rc->start;
 
 	/*
 	 * Allocate a page size buffer to check all 0xFF data
@@ -683,7 +701,8 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	 */
 	host->erase_buf_data = kmalloc(mtd->writesize, GFP_KERNEL);
 	if (!host->erase_buf_data) {
-		dev_err(&pdev->dev,"lpc32xx_nand: failed to allocate device structure.\n");
+		dev_err(&pdev->dev,"lpc32xx_nand: failed to allocate "
+			"device structure.\n");
 		return -ENOMEM;
 		goto err_exit5;
 	}
@@ -705,13 +724,13 @@ static int __init lpc32xx_nand_probe(struct platform_device *pdev)
 	num_partitions = parse_mtd_partitions(mtd, part_probes,
 					      &partitions, 0);
 #endif
-	if ((num_partitions <= 0) && (host->ncfg->partition_info)) {
+	if ((num_partitions <= 0) && (host->ncfg->partition_info))
 		partitions = host->ncfg->partition_info(mtd->size,
-							 &num_partitions);
-	}
+			&num_partitions);
 
 	if ((!partitions) || (num_partitions == 0)) {
-		dev_err(&pdev->dev,"lpc32xx_nand: No parititions defined, or unsupported device.\n");
+		dev_err(&pdev->dev,"lpc32xx_nand: No parititions defined,"
+			" or unsupported device.\n");
 		res = ENXIO;
 		goto err_exit6;
 	}
@@ -728,7 +747,7 @@ err_exit6:
 	kfree(host->erase_buf_data);
 err_exit5:
 	dma_free_coherent(&pdev->dev, host->dma_buf_len,
-	                        host->oob_buf, host->oob_buf_phy);
+		host->oob_buf, host->oob_buf_phy);
 err_exit4:
 	/* Free the DMA channel used by us */
 	lpc32xx_dma_ch_disable(host->dmach);
