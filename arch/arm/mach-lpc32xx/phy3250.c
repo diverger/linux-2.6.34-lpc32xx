@@ -426,17 +426,18 @@ static struct mtd_partition * phy3250_nand_partitions(int size, int *num_partiti
         *num_partitions = ARRAY_SIZE(phy3250_nand_partition);
         return phy3250_nand_partition;
 }
-struct lpc32XX_nand_cfg lpc32xx_nandcfg =
+static struct lpc32XX_nand_cfg lpc32xx_nandcfg =
 {
-        .wdr_clks               = 3,
-        .wwidth                 = 28571428,
+        .wdr_clks               = 14,
+        .wwidth                 = 40000000,
         .whold                  = 100000000,
-        .wsetup                 = 66666666,
-        .rdr_clks               = 3,
-        .rwidth                 = 28571428,
-        .rhold                  = 100000000,
-        .rsetup                 = 66666666,
-        .use16bus               = 0,
+        .wsetup                 = 100000000,
+        .rdr_clks               = 14,
+        .rwidth                 = 40000000,
+        .rhold                  = 66666666,
+        .rsetup                 = 100000000,
+	.use_bbt		= true,
+	.polled_completion	= false,
         .enable_write_prot      = nandwp_enable,
         .partition_info         = phy3250_nand_partitions,
 };

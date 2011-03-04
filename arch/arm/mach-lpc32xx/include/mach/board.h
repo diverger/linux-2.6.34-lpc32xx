@@ -37,7 +37,8 @@ struct lpc32XX_nand_cfg
         u32             rwidth;
         u32             rhold;
         u32             rsetup;
-        int             use16bus; /* 0 = 8-bit, !0 = not support */
+	bool		use_bbt;
+	bool		polled_completion;
         en_wp           enable_write_prot;
         struct mtd_partition* (*partition_info)(int, int*);
 };

@@ -660,7 +660,8 @@ struct lpc32XX_nand_cfg lpc32xx_nandcfg =
         .rwidth                 = 34666666,
         .rhold                  = 104000000,
         .rsetup                 = 200000000,
-        .use16bus               = 0,
+	.use_bbt		= true,
+	.polled_completion	= false,
         .enable_write_prot      = nandwp_enable,
         .partition_info         = ea3250_nand_partitions,
 };
