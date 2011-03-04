@@ -360,6 +360,21 @@ int lpc32xx_dma_start_pflow_xfer(int ch,
 }
 EXPORT_SYMBOL_GPL(lpc32xx_dma_start_pflow_xfer);
 
+int lpc32xx_dma_is_active(int ch)
+{
+	int active = 0;
+
+	if ((VALID_CHANNEL(ch)) && (dma_ctrl.dma_channels[ch].name != NULL)) {
+		if (__raw_readl(DMACH_CONFIG_CH(DMAIOBASE, ch)) &
+			DMAC_CHAN_ENABLE)
+			active = 1;
+	}
+
+	return active;
+
+}
+EXPORT_SYMBOL_GPL(lpc32xx_dma_is_active);
+
 extern u32 lpc32xx_dma_llist_v_to_p(int ch,
 				    u32 vlist) {
 	u32 pptr;

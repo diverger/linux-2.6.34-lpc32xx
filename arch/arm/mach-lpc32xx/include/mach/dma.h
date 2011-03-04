@@ -34,7 +34,7 @@
 #define DMA_CH_SLCNAND		4
 
 enum {
-	DMA_INT_UNKNOWN = 0,
+	DMA_NO_INT = 0,
 	DMA_ERR_INT = 1,
 	DMA_TC_INT = 2,
 };
@@ -82,6 +82,11 @@ extern int lpc32xx_dma_start_pflow_xfer(int ch,
 					void *src,
 					void *dst,
 					int enable);
+
+/*
+ * DMA channel status
+ */
+extern int lpc32xx_dma_is_active(int ch);
 
 /*
  * DMA linked list support
