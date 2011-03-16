@@ -912,7 +912,7 @@ static int i2c_pnx_smbus_xfer(struct i2c_adapter *adapter,
 		iowrite32(ioread32(I2C_REG_CTL(smbus)) | mcntrl_reset,
 			  I2C_REG_CTL(smbus));
 	}
-	
+
 	clk_disable(smbus->clk);
 
 	return err;
@@ -1045,7 +1045,7 @@ static int __devinit i2c_pnx_probe(struct platform_device *pdev)
 	       alg_data->adapter.name, i2c_pnx->base, i2c_pnx->irq);
 
 	/* Disable clock until needed */
-	clk_enable(alg_data->clk);
+	clk_disable(alg_data->clk);
 
 	return 0;
 
