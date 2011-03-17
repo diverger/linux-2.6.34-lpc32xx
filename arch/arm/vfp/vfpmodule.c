@@ -398,8 +398,12 @@ static int vfp_pm_suspend(struct sys_device *dev, pm_message_t state)
 
 static int vfp_pm_resume(struct sys_device *dev)
 {
+	unsigned int cpu_arch = cpu_architecture();
+
 	/* ensure we have access to the vfp */
-	vfp_enable(NULL);
+	if (cpu_arch >= CPU_ARCH_ARMv6) {
+		vfp_enable(NULL);
+	}
 
 	/* and disable it to ensure the next usage restores the state */
 	fmxr(FPEXC, fmrx(FPEXC) & ~FPEXC_EN);
