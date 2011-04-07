@@ -1163,8 +1163,8 @@ static void done(struct lpc32xx_ep *ep, struct lpc32xx_request *req, int status)
 		ep_dbg(ep, "%s done %p, status %d\n", ep->ep.name, req, status);
 	}
 
+	ep->req_pending = 0;
 	spin_unlock(&udc->lock);
-
 	req->req.complete(&ep->ep, &req->req);
 	spin_lock(&udc->lock);
 }
@@ -1960,7 +1960,7 @@ static int udc_get_status(struct lpc32xx_udc *udc, u16 reqtype, u16 wIndex) {
 	struct lpc32xx_ep *ep;
 	u32 ep0buff = 0, tmp;
 
-	switch (reqtype) {
+	switch (reqtype & USB_RECIP_MASK) {
 		case USB_RECIP_INTERFACE:
 			/* Not supported */
 			break;
@@ -2070,7 +2070,7 @@ static void udc_handle_ep0_setup(struct lpc32xx_udc *udc) {
 					if (tmp == 0)
 						break;
 
-					if (req == USB_REQ_CLEAR_FEATURE)
+					if (req == USB_REQ_SET_FEATURE)
 						udc_stall_hwep(udc, tmp);
 					else
 						udc_clrstall_hwep(udc, tmp);
