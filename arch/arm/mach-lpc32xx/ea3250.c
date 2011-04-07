@@ -25,6 +25,7 @@
 #include <linux/spi/spi.h>
 #include <linux/spi/eeprom.h>
 #include <linux/leds.h>
+#include <linux/leds-pca9532.h>
 #include <linux/gpio.h>
 #include <linux/input.h>
 #include <linux/amba/bus.h>
@@ -91,6 +92,52 @@ static struct platform_device lpc32xx_gpio_led_device = {
 	.name			= "leds-gpio",
 	.id			= -1,
 	.dev.platform_data	= &led_data,
+};
+
+static struct pca9532_platform_data ea3250_leds = {
+	.leds = {
+	{ 	.type = PCA9532_TYPE_NONE }, /* Key 1 */
+	{ 	.type = PCA9532_TYPE_NONE }, /* Key 2 */
+	{ 	.type = PCA9532_TYPE_NONE }, /* Key 3 */
+	{ 	.type = PCA9532_TYPE_NONE }, /* Key 4 */
+	{ 	.type = PCA9532_TYPE_NONE }, /* MMC CD */
+	{ 	.type = PCA9532_TYPE_NONE }, /* MMC WP */
+	{ 	.type = PCA9532_TYPE_NONE }, /* not used */
+	{ 	.type = PCA9532_TYPE_NONE }, /* not used */
+	{	.name = "eabb:red:led1",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led2",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led3",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led4",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led5",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led6",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led7",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	},
+	{	.name = "eabb:red:led8",
+		.state = PCA9532_OFF,
+		.type = PCA9532_TYPE_LED,
+	}, },
+	.psc = { 0, 0 },
+	.pwm = { 0, 0 },
 };
 
 /*
@@ -817,12 +864,12 @@ static struct platform_device lpc32xx_net_device = {
 /*
  * I2C devices support
  */
-#if defined (CONFIG_SENSORS_PCA9532) || defined (CONFIG_AT24)
+#if defined (CONFIG_LEDS_PCA9532) || defined (CONFIG_AT24)
 	static struct i2c_board_info __initdata ea3250_i2c_board_info [] = {
-#if defined (CONFIG_SENSORS_PCA9532)
+#if defined (CONFIG_LEDS_PCA9532)
 		{
 			I2C_BOARD_INFO("pca9532", I2C_PCA9532_ADDR),
-
+			.platform_data = &ea3250_leds,
 		},
 #endif
 #if defined (CONFIG_AT24)
@@ -945,7 +992,7 @@ void __init ea3250_board_init(void)
 			LPC32XX_CLKPWR_TESTCLK_TESTCLK2_EN,
 			LPC32XX_CLKPWR_TEST_CLK_SEL);
 
-#if defined (CONFIG_SENSORS_PCA9532) || defined (CONFIG_AT24)
+#if defined (CONFIG_LEDS_PCA9532) || defined (CONFIG_AT24)
 	i2c_register_board_info(0, ea3250_i2c_board_info,
 			ARRAY_SIZE(ea3250_i2c_board_info));
 #endif
