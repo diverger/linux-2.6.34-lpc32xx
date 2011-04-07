@@ -58,6 +58,7 @@
 #define	LCD_RS_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)
 #define	BKL_POW_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 14)
 #define	SSEL0_GPIO5	LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 5)
+#define	MMC_POWER_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)
 
 /*
  * LCD controller functions
@@ -581,11 +582,88 @@ void __init ea3250_spi_lcdc_drv_init(void)
         spi_register_driver(&ea3250_spi_lcdc_driver);
 }
 
+#if defined (CONFIG_MMC_ARMMMCI)
+
+/*
+ * Returns !0 when card is removed, 0 when present
+ */
+unsigned int mmc_card_detect(struct device *dev)
+{
+	/*
+	 * This function may be adapted to retrieve the actual 'card detect'
+	 * status over the I2C bus, from PCA9532 pin 8 (LED4). For now, simply
+	 * indicate that a card is always present.
+	*/
+	return 0;
+}
+
+/*
+ * Enable or disable SD slot power
+ */
+void mmc_power_enable(int enable)
+{
+	if (enable != 0)
+	{
+		/* active low */
+		gpio_set_value(MMC_POWER_GPIO,0);
+	}
+	else
+	{
+		gpio_set_value(MMC_POWER_GPIO,0);
+	}
+}
+
+/*
+ * Board specific MMC driver data
+ */
+struct mmci_platform_data lpc32xx_plat_data = {
+	.ocr_mask	= MMC_VDD_30_31|MMC_VDD_31_32|MMC_VDD_32_33|MMC_VDD_33_34,
+	.translate_vdd	= NULL,
+	.capabilities	= MMC_CAP_4_BIT_DATA,
+	/*
+	 * Indicate no direct GPIO, so MMC driver will assume card is NOT
+	 * write-protected
+	 */
+        .gpio_wp        = -ENOSYS,
+	/*
+	 * Indicate no direct GPIO, so MMC driver will call 'status' callback
+	 * function
+	 */
+        .gpio_cd        = -ENOSYS,
+	/*
+	 * Callback function, used by MMC driver in case 'gpio_cd'
+	 * equals -ENOSYS
+	 */
+	.status		= mmc_card_detect,
+};
+
+/*
+ * SD card controller resources
+ */
+struct amba_device lpc32xx_mmc_device = {
+	.dev				= {
+		.coherent_dma_mask	= ~0,
+		.init_name		= "dev:mmc0",
+		.platform_data		= &lpc32xx_plat_data,
+	},
+	.res				= {
+		.start			= LPC32XX_SD_BASE,
+		.end			= (LPC32XX_SD_BASE + SZ_4K - 1),
+		.flags			= IORESOURCE_MEM,
+	},
+	.dma_mask			= ~0,
+	.irq				= {IRQ_LPC32XX_SD0, IRQ_LPC32XX_SD1},
+};
+#endif
+
 /* AMBA based devices list */
 static struct amba_device *amba_devs[] __initdata = {
 	&lpc32xx_ssp0_device,
 #if defined (CONFIG_FB_ARMCLCD)
 	&lpc32xx_clcd_device,
+#endif
+#if defined (CONFIG_MMC_ARMMMCI)
+	&lpc32xx_mmc_device,
 #endif
 };
 
@@ -785,6 +863,11 @@ void __init ea3250_board_init(void)
 
 	/* Intiliase GPIO */
 	lpc32xx_gpio_init();
+
+#if defined (CONFIG_MMC_ARMMMCI)
+	/* Enable SD slot power */
+	mmc_power_enable(1);
+#endif
 
 	/* Set SPI CS GPIO to output */
 	gpio_request(SPI0_CS_GPIO, "spi0 cs");
