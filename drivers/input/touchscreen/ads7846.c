@@ -815,18 +815,18 @@ static int ads7846_suspend(struct spi_device *spi, pm_message_t message)
 {
 	struct ads7846 *ts = dev_get_drvdata(&spi->dev);
 
-	spin_lock_irq(&ts->lock);
-
-	ts->is_suspended = 1;
-	ads7846_disable(ts);
-
-	spin_unlock_irq(&ts->lock);
-
 	if (device_may_wakeup(&ts->spi->dev))
 		enable_irq_wake(ts->spi->irq);
+	else {
+		spin_lock_irq(&ts->lock);
+
+		ts->is_suspended = 1;
+		ads7846_disable(ts);
+
+		spin_unlock_irq(&ts->lock);
+	}
 
 	return 0;
-
 }
 
 static int ads7846_resume(struct spi_device *spi)
@@ -835,13 +835,14 @@ static int ads7846_resume(struct spi_device *spi)
 
 	if (device_may_wakeup(&ts->spi->dev))
 		disable_irq_wake(ts->spi->irq);
+	else {
+		spin_lock_irq(&ts->lock);
 
-	spin_lock_irq(&ts->lock);
+		ts->is_suspended = 0;
+		ads7846_enable(ts);
 
-	ts->is_suspended = 0;
-	ads7846_enable(ts);
-
-	spin_unlock_irq(&ts->lock);
+		spin_unlock_irq(&ts->lock);
+	}
 
 	return 0;
 }

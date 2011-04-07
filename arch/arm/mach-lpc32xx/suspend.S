@@ -117,8 +117,8 @@ ENTRY(lpc32xx_sys_suspend)
 		#LPC32XX_CLKPWR_HCLKPLL_CTRL_OFFS]
 4:
 	ldr	WORK2_REG, [CLKPWRBASE_REG, #LPC32XX_CLKPWR_HCLKPLL_CTRL_OFFS]
-	and	WORK2_REG, WORK2_REG, #LPC32XX_CLKPWR_HCLKPLL_PLL_STS
-	bne	4b
+	ands WORK2_REG, WORK2_REG, #LPC32XX_CLKPWR_HCLKPLL_PLL_STS
+	beq 4b
 
 	@ Re-enter run mode with self-refresh flag cleared, but no DRAM
 	@ update yet. DRAM is still in self-refresh
@@ -139,8 +139,8 @@ ENTRY(lpc32xx_sys_suspend)
 	@ Wait for EMC to clear self-refresh mode
 5:
 	ldr	WORK2_REG, [EMCBASE_REG, #LPC32XX_EMC_STATUS_OFFS]
-	and	WORK2_REG, WORK2_REG, #LPC32XX_EMC_STATUS_SELF_RFSH
-	bne	5b @ Branch until self-refresh has exited
+	ands WORK2_REG, WORK2_REG, #LPC32XX_EMC_STATUS_SELF_RFSH
+	bne 5b @ Branch until self-refresh has exited
 
 	@ restore regs and return
 	adr	r0, tmp_stack

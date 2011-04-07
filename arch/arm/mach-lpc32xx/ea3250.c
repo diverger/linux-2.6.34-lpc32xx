@@ -206,6 +206,7 @@ static struct ads7846_platform_data ea_ads7846_platform_data __initdata = {
 	.debounce_tol	= 3,
 	.pressure_max	= 1024,
 	.get_pendown_state = ea3250_ads7846_pendown_state,
+	.wakeup = true,
 };
 
 /*
