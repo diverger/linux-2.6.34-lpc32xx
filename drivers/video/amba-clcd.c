@@ -25,6 +25,7 @@
 #include <linux/amba/clcd.h>
 #include <linux/clk.h>
 #include <linux/hardirq.h>
+#include <linux/console.h>
 
 #include <asm/sizes.h>
 
@@ -77,6 +78,8 @@ static void clcdfb_disable(struct clcd_fb *fb)
 		writel(val, fb->regs + fb->off_cntl);
 	}
 
+	clcdfb_sleep(20);
+
 	/*
 	 * Disable CLCD clock source.
 	 */
@@ -89,6 +92,8 @@ static void clcdfb_enable(struct clcd_fb *fb, u32 cntl)
 	 * Enable the CLCD clock source.
 	 */
 	clk_enable(fb->clk);
+
+	clcdfb_sleep(20);
 
 	/*
 	 * Bring up by first enabling..
@@ -525,8 +530,11 @@ static int clcdfb_remove(struct amba_device *dev)
 static int clcdfb_suspend(struct amba_device *dev, pm_message_t msg)
 {
 	struct clcd_fb *fb = amba_get_drvdata(dev);
-	
+	acquire_console_sem();
+	fb_set_suspend(&fb->fb,1);
 	clcdfb_disable(fb);
+          release_console_sem();
+
 	return 0;
 }
 
@@ -534,7 +542,11 @@ static int clcdfb_resume(struct amba_device *dev)
 {
 	struct clcd_fb *fb = amba_get_drvdata(dev);
 	
+	acquire_console_sem();
 	clcdfb_enable(fb, fb->clcd_cntl);
+	fb_set_suspend(&fb->fb,0);
+          release_console_sem();
+
 	return 0;
 }
 #else
