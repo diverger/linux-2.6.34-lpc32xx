@@ -460,8 +460,8 @@ static int lpc3xxx_pcm_suspend(struct snd_soc_dai *dai)
 
 	prtd = runtime->private_data;
 
-	/* Enable the DMA channel */
-	lpc32xx_dma_ch_enable(prtd->dmach);
+	/* Disable the DMA channel */
+	lpc32xx_dma_ch_disable(prtd->dmach);
 
 	return 0;
 }
@@ -476,8 +476,8 @@ static int lpc3xxx_pcm_resume(struct snd_soc_dai *dai)
 
 	prtd = runtime->private_data;
 
-	/* Disable the DMA channel */
-	lpc32xx_dma_ch_disable(prtd->dmach);
+	/* Enable the DMA channel */
+	lpc32xx_dma_ch_enable(prtd->dmach);
 
 	return 0;
 }
