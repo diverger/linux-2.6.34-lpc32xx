@@ -22,6 +22,7 @@
 
 #include "platform.h"
 #include <linux/mtd/partitions.h>
+#include <linux/serial_core.h>
 
 /*
  * NAND platform configuration structure
@@ -73,6 +74,13 @@ struct lpc32xx_usbd_cfg
         usc_chg_event rmwk_chgb; /* Enable/disable remote wakeup */
 };
 
+/*
+ * High Speed UART configuration structure
+ */
+struct lpc32xx_hsuart_port {
+	struct uart_port port;
+	unsigned int fbit_sam;
+};
 
 #endif	/* __ASM_ARCH_BOARD_H */
 
