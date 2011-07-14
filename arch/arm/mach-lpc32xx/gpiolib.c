@@ -104,7 +104,7 @@ static char *gpi_p3_names[LPC32XX_GPI_P3_MAX] = {
 	 NULL,    NULL,    NULL,   "gpi15",
 	"gpi16", "gpi17", "gpi18", "gpi19",
 	"gpi20", "gpi21", "gpi22", "gpi23",
-	"gpi24", "gpi25", "gpi26", "gpi27"
+	"gpi24", "gpi25", "gpi26", "gpi27",
 	"gpi28"
 };
 
