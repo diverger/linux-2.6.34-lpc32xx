@@ -21,6 +21,11 @@ choice
         help
             Support for the Future Designs LPC3250 Touch screen kit
 
+    config MACH_SMART3250
+        bool "Smart 3250 development board"
+        help
+            Support for the Smart 3250 development board
+
 endchoice
 
 menu "Embedded Artists Display Selection"

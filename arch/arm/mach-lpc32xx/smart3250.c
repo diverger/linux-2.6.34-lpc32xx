@@ -1,5 +1,5 @@
 /*
- * arch/arm/mach-lpc32xx/phy3250.c
+ * arch/arm/mach-lpc32xx/smart3250.c
  *
  * Author: Kevin Wells <kevin.wells@nxp.com>
  *
@@ -46,32 +46,32 @@
 /*
  * Mapped GPIOLIB GPIOs
  */
-#define SPI0_CS_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 5)
-#define LCD_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 0)
-#define BKL_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 4)
-#define LED_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)
-#define NAND_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 19)
-#define	MMC_PWR_ENABLE_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)
-#define	MMC_CD_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 1)
-#define	MMC_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 0)
+#define SPI0_CS_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 5)			// the same to phytec board
+#define LCD_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 10)			// smartarm3250 use P3 GPO 10
+#define BKL_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 4)				// not found, GPO 04 is used for USB power on smartarm3250 board
+#define LED_GPIO			LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)				// smartarm3250 use P3 GPO 05, low level light
+#define NAND_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 14)			// smartarm3250 use P3 GPIO 14
+#define	MMC_PWR_ENABLE_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)				// smartarm3250 use P3 GPO 01
+#define	MMC_CD_GPIO			LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 4)				// smartarm3250 use P3 GPI 04
+#define	MMC_WP_GPIO			LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 9)				// smartarm3250 use P3 GPI 09
 
 /*
  * AMBA LCD controller
  */
 static struct clcd_panel conn_lcd_panel = {
 	.mode		= {
-		.name		= "QVGA portrait",
-		.refresh	= 60,
-		.xres		= 240,
-		.yres		= 320,
-		.pixclock	= 191828,
-		.left_margin	= 22,
-		.right_margin	= 11,
-		.upper_margin	= 2,
-		.lower_margin	= 1,
-		.hsync_len	= 5,
-		.vsync_len	= 2,
-		.sync		= 0,
+		.name		= "QVGA TFT-4238",		// smartarm3250 use TFT-4238
+		.refresh	= 65,
+		.xres		= 320,
+		.yres		= 240,
+		.pixclock	= 80000,
+		.left_margin	= 19,
+		.right_margin	= 12,
+		.upper_margin	= 1,
+		.lower_margin	= 4,
+		.hsync_len	= 3,
+		.vsync_len	= 16,
+		.sync		= 1,
 		.vmode		= FB_VMODE_NONINTERLACED,
 	},
 	.width		= -1,
@@ -105,12 +105,13 @@ static int lpc32xx_clcd_setup(struct clcd_fb *fb)
 		printk(KERN_ERR "Error setting gpio %u to output",
 			LCD_POWER_GPIO);
 
-	if (gpio_request(BKL_POWER_GPIO, "LCD backlight power"))
-		printk(KERN_ERR "Error requesting gpio %u",
-			BKL_POWER_GPIO);
-	else if (gpio_direction_output(BKL_POWER_GPIO, 1))
-		printk(KERN_ERR "Error setting gpio %u to output",
-			BKL_POWER_GPIO);
+	// It seems there are no back light control on smartarm3250 board.
+	//if (gpio_request(BKL_POWER_GPIO, "LCD backlight power"))
+	//	printk(KERN_ERR "Error requesting gpio %u",
+	//		BKL_POWER_GPIO);
+	//else if (gpio_direction_output(BKL_POWER_GPIO, 1))
+	//	printk(KERN_ERR "Error setting gpio %u to output",
+	//		BKL_POWER_GPIO);
 
 	return 0;
 }
@@ -174,7 +175,7 @@ static struct amba_device lpc32xx_clcd_device = {
 /*
  * AMBA SSP (SPI)
  */
-static void phy3250_spi_cs_set(u32 control)
+static void smart3250_spi_cs_set(u32 control)
 {
 	gpio_set_value(SPI0_CS_GPIO, (int) control);
 }
@@ -195,7 +196,7 @@ static struct pl022_config_chip spi0_chip_info = {
 	.ctrl_len		= SSP_BITS_8,
 	.wait_state		= SSP_MWIRE_WAIT_ZERO,
 	.duplex			= SSP_MICROWIRE_CHANNEL_FULL_DUPLEX,
-	.cs_control		= phy3250_spi_cs_set,
+	.cs_control		= smart3250_spi_cs_set,
 };
 
 static struct pl022_ssp_controller lpc32xx_ssp0_data = {
@@ -220,7 +221,7 @@ static struct amba_device lpc32xx_ssp0_device = {
 };
 
 /* AT25 driver registration */
-static int __init phy3250_spi_board_register(void)
+static int __init smart3250_spi_board_register(void)
 {
 #if defined(CONFIG_SPI_SPIDEV) || defined(CONFIG_SPI_SPIDEV_MODULE)
 	static struct spi_board_info info[] = {
@@ -236,8 +237,8 @@ static int __init phy3250_spi_board_register(void)
 #else
 	static struct spi_eeprom eeprom = {
 		.name = "at25256a",
-		.byte_len = 0x8000,
-		.page_size = 64,
+		.byte_len = 0x200000,
+		.page_size = 4096,
 		.flags = EE_ADDR2,
 	};
 
@@ -254,12 +255,13 @@ static int __init phy3250_spi_board_register(void)
 #endif
 	return spi_register_board_info(info, ARRAY_SIZE(info));
 }
-arch_initcall(phy3250_spi_board_register);
+arch_initcall(smart3250_spi_board_register);
 
 /*
  * Platform Data for UDA1380 Audiocodec.
  * As there are no GPIOs for codec power & reset pins,
  * dummy GPIO numbers are used.
+ * Note: This not used on smararm3250 board
  */
 static struct uda1380_platform_data uda1380_info = {
         .gpio_power = LPC32XX_GPIO(LPC32XX_GPO_P3_GRP,10),
@@ -267,14 +269,14 @@ static struct uda1380_platform_data uda1380_info = {
         .dac_clk    = UDA1380_DAC_CLK_WSPLL,
 };
 
-static struct i2c_board_info __initdata phy3250_i2c_board_info[] = {
+static struct i2c_board_info __initdata smart3250_i2c_board_info[] = {
 	{
 		I2C_BOARD_INFO("pcf8563", 0x51),
 	},
-        {
-                I2C_BOARD_INFO("uda1380", 0x18),
-                .platform_data = &uda1380_info,
-        },
+        //{
+        //        I2C_BOARD_INFO("uda1380", 0x18),
+        //        .platform_data = &uda1380_info,
+        //},
 };
 
 static struct gpio_led phy_leds[] = {
@@ -300,13 +302,13 @@ static struct platform_device lpc32xx_gpio_led_device = {
 /*
  * Board specific key scanner driver data
  */
-#define PHY3250_KMATRIX_SIZE 1
+#define SMART3250__KMATRIX_SIZE 1
 static int lpc32xx_keymaps[] = {
 	KEY_1,  /* 1, 1 */
 };
 
 static struct lpc32XX_kscan_cfg lpc32xx_kscancfg = {
-	.matrix_sz      = PHY3250_KMATRIX_SIZE,
+	.matrix_sz      = SMART3250__KMATRIX_SIZE,
 	.keymap         = lpc32xx_keymaps,
 	/* About a 30Hz scan rate based on a 32KHz clock */
 	.deb_clks       = 3,
@@ -393,53 +395,54 @@ static int nandwp_enable(int enable)
 
         return 1;
 }
-#define BLK_SIZE (512 * 32)
-static struct mtd_partition phy3250_nand_partition[] = {
+#define BLK_SIZE (2048 * 64)
+// Must match with the u-boot settings, 0~3 for kickstart, S1L, 4~7 for u-boot, 8~9 for u-boot configurations
+static struct mtd_partition smart3250_nand_partition[] = {
         {
-                .name   = "phy3250-boot",
+                .name   = "smart3250-boot",
                 .offset = 0,
-                .size   = (BLK_SIZE * 25)
+                .size   = (BLK_SIZE * 4)
         },
         {
-                .name   = "phy3250-uboot",
-                .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 100)
-        },
-        {
-                .name   = "phy3250-ubt-prms",
+                .name   = "smart3250-uboot",
                 .offset = MTDPART_OFS_APPEND,
                 .size   = (BLK_SIZE * 4)
         },
         {
-                .name   = "phy3250-kernel",
+                .name   = "smart3250-ubt-prms",
                 .offset = MTDPART_OFS_APPEND,
-                .size   = (BLK_SIZE * 256)
+                .size   = (BLK_SIZE * 2)
         },
         {
-                .name   = "phy3250-rootfs",
+                .name   = "smart3250-kernel",
+                .offset = MTDPART_OFS_APPEND,
+                .size   = (BLK_SIZE * 32)
+        },
+        {
+                .name   = "smart3250-rootfs",
                 .offset = MTDPART_OFS_APPEND,
                 .size   = MTDPART_SIZ_FULL
         },
 };
-static struct mtd_partition * phy3250_nand_partitions(int size, int *num_partitions)
+static struct mtd_partition * smart3250_nand_partitions(int size, int *num_partitions)
 {
-        *num_partitions = ARRAY_SIZE(phy3250_nand_partition);
-        return phy3250_nand_partition;
+        *num_partitions = ARRAY_SIZE(smart3250_nand_partition);
+        return smart3250_nand_partition;
 }
 static struct lpc32XX_nand_cfg lpc32xx_nandcfg =
 {
         .wdr_clks               = 14,
-        .wwidth                 = 40000000,
-        .whold                  = 100000000,
-        .wsetup                 = 100000000,
+        .wwidth                 = 260000000,
+        .whold                  = 104000000,
+        .wsetup                 = 200000000,
         .rdr_clks               = 14,
-        .rwidth                 = 40000000,
-        .rhold                  = 66666666,
-        .rsetup                 = 100000000,
+        .rwidth                 = 34666666,
+        .rhold                  = 104000000,
+        .rsetup                 = 200000000,
 	.use_bbt		= true,
 	.polled_completion	= false,
         .enable_write_prot      = nandwp_enable,
-        .partition_info         = phy3250_nand_partitions,
+        .partition_info         = smart3250_nand_partitions,
 };
 
 /*
@@ -510,7 +513,7 @@ static struct platform_device lpc32xx_net_device = {
 	.resource       = net_resources,
 };
 
-static struct platform_device *phy3250_devs[] __initdata = {
+static struct platform_device *smart3250_devs[] __initdata = {
 	&lpc32xx_i2c0_device,
 	&lpc32xx_i2c1_device,
 	&lpc32xx_i2c2_device,
@@ -542,7 +545,7 @@ static struct amba_device *amba_devs[] __initdata = {
 /*
  * Board specific functions
  */
-static void __init phy3250_board_init(void)
+static void __init smart3250_board_init(void)
 {
 	u32 tmp;
 	int i;
@@ -622,7 +625,7 @@ static void __init phy3250_board_init(void)
 		LPC32XX_CLKPWR_SSP_CLK_CTRL);
 #endif
 
-	platform_add_devices(phy3250_devs, ARRAY_SIZE(phy3250_devs));
+	platform_add_devices(smart3250_devs, ARRAY_SIZE(smart3250_devs));
 	for (i = 0; i < ARRAY_SIZE(amba_devs); i++) {
 		struct amba_device *d = amba_devs[i];
 		amba_device_register(d, &iomem_resource);
@@ -633,8 +636,8 @@ static void __init phy3250_board_init(void)
 		LPC32XX_CLKPWR_TESTCLK_TESTCLK2_EN,
 		LPC32XX_CLKPWR_TEST_CLK_SEL);
 
-	i2c_register_board_info(0, phy3250_i2c_board_info,
-		ARRAY_SIZE(phy3250_i2c_board_info));
+	i2c_register_board_info(0, smart3250_i2c_board_info,
+		ARRAY_SIZE(smart3250_i2c_board_info));
 }
 
 static int __init lpc32xx_display_uid(void)
@@ -660,15 +663,15 @@ arch_initcall(lpc32xx_display_uid);
  * using IRQ and wakeup from GPI edge state.
  *
  */
-#define BTN1_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 3)
-static irqreturn_t phy3250_btn1_irq(int irq, void *dev)
+#define BTN1_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 7)	// smartarm3250 use GPI_07
+static irqreturn_t smart3250_btn1_irq(int irq, void *dev)
 {
 	printk(KERN_INFO "GPIO IRQ!\n");
 
 	return IRQ_HANDLED;
 }
 
-static int __init phy3250_button_setup(void)
+static int __init smart3250_button_setup(void)
 {
 	int ret;
 
@@ -681,21 +684,21 @@ static int __init phy3250_button_setup(void)
 	 * Wakeup/irq on low edge - the wakeup state will use the same
 	 * state as the IRQ edge state.
 	 */
-	set_irq_type(IRQ_LPC32XX_GPI_03, IRQ_TYPE_EDGE_FALLING);
-	ret = request_irq(IRQ_LPC32XX_GPI_03, phy3250_btn1_irq,
+	set_irq_type(IRQ_LPC32XX_GPI_07, IRQ_TYPE_EDGE_FALLING);
+	ret = request_irq(IRQ_LPC32XX_GPI_07, smart3250_btn1_irq,
 		IRQF_DISABLED, "gpio_btn1_irq", NULL);
 	if (ret < 0) {
 		printk(KERN_ERR "Can't request interrupt\n");
 		return 0;
 	}
 
-	enable_irq_wake(IRQ_LPC32XX_GPI_03);
+	enable_irq_wake(IRQ_LPC32XX_GPI_07);
 
 	return 1;
 }
-device_initcall(phy3250_button_setup);
+device_initcall(smart3250_button_setup);
 
-MACHINE_START(PHY3250, "Phytec 3250 board with the LPC3250 Microcontroller")
+MACHINE_START(SMART3250_, "Phytec 3250 board with the LPC3250 Microcontroller")
 	/* Maintainer: Kevin Wells, NXP Semiconductors */
 	.phys_io	= LPC32XX_UART5_BASE,
 	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
@@ -703,17 +706,17 @@ MACHINE_START(PHY3250, "Phytec 3250 board with the LPC3250 Microcontroller")
 	.map_io		= lpc32xx_map_io,
 	.init_irq	= lpc32xx_init_irq,
 	.timer		= &lpc32xx_timer,
-	.init_machine	= phy3250_board_init,
+	.init_machine	= smart3250_board_init,
 MACHINE_END
 
-/* For backwards compatibility with older bootloaders only */
-MACHINE_START(LPC3XXX, "Phytec 3250 board with the LPC3250 Microcontroller")
-	/* Maintainer: Kevin Wells, NXP Semiconductors */
-	.phys_io	= LPC32XX_UART5_BASE,
-	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
-	.boot_params	= 0x80000100,
-	.map_io		= lpc32xx_map_io,
-	.init_irq	= lpc32xx_init_irq,
-	.timer		= &lpc32xx_timer,
-	.init_machine	= phy3250_board_init,
-MACHINE_END
+///* For backwards compatibility with older bootloaders only */
+//MACHINE_START(LPC3XXX, "Phytec 3250 board with the LPC3250 Microcontroller")
+//	/* Maintainer: Kevin Wells, NXP Semiconductors */
+//	.phys_io	= LPC32XX_UART5_BASE,
+//	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
+//	.boot_params	= 0x80000100,
+//	.map_io		= lpc32xx_map_io,
+//	.init_irq	= lpc32xx_init_irq,
+//	.timer		= &lpc32xx_timer,
+//	.init_machine	= smart3250_board_init,
+//MACHINE_END

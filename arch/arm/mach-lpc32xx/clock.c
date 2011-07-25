@@ -900,6 +900,7 @@ static int clcd_set_rate(struct clk *clk, unsigned long rate)
 		tmp &= ~(0xF800001F);
 		tmp |= (div & 0x1F);
 		tmp |= (((div >> 5) & 0x1F) << 27);
+		tmp |= (1<<14);		// TFT-4238 DEN is low active!
 	}
 
 	__raw_writel(tmp, io_p2v(LPC32XX_LCD_BASE + CLCD_TIM2));
