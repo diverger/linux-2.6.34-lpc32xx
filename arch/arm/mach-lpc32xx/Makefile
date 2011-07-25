@@ -7,4 +7,4 @@ obj-y	+=  dma.o gpiolib.o pm.o suspend.o
 obj-$(CONFIG_MACH_PHY3250)	+= phy3250.o
 obj-$(CONFIG_MACH_EA3250)	+= ea3250.o
 obj-$(CONFIG_MACH_FDI3250)	+= fdi3250.o
-obj-$(CONFIG_MACH_PHY3250)	+= smart3250.o
+obj-$(CONFIG_MACH_SMART3250)	+= smart3250.o

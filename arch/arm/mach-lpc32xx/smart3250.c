@@ -48,12 +48,12 @@
  */
 #define SPI0_CS_GPIO		LPC32XX_GPIO(LPC32XX_GPIO_P3_GRP, 5)			// the same to phytec board
 #define LCD_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 10)			// smartarm3250 use P3 GPO 10
-#define BKL_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 4)				// not found, GPO 04 is used for USB power on smartarm3250 board
-#define LED_GPIO			LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)				// smartarm3250 use P3 GPO 05, low level light
+#define BKL_POWER_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 4)			// not found, GPO 04 is used for USB power on smartarm3250 board
+#define LED_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 5)			// smartarm3250 use P3 GPO 05, low level light
 #define NAND_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 14)			// smartarm3250 use P3 GPIO 14
-#define	MMC_PWR_ENABLE_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)				// smartarm3250 use P3 GPO 01
-#define	MMC_CD_GPIO			LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 4)				// smartarm3250 use P3 GPI 04
-#define	MMC_WP_GPIO			LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 9)				// smartarm3250 use P3 GPI 09
+#define	MMC_PWR_ENABLE_GPIO	LPC32XX_GPIO(LPC32XX_GPO_P3_GRP, 1)			// smartarm3250 use P3 GPO 01
+#define	MMC_CD_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 4)			// smartarm3250 use P3 GPI 04
+#define	MMC_WP_GPIO		LPC32XX_GPIO(LPC32XX_GPI_P3_GRP, 9)			// smartarm3250 use P3 GPI 09
 
 /*
  * AMBA LCD controller
@@ -698,7 +698,7 @@ static int __init smart3250_button_setup(void)
 }
 device_initcall(smart3250_button_setup);
 
-MACHINE_START(SMART3250_, "Phytec 3250 board with the LPC3250 Microcontroller")
+MACHINE_START(SMART3250, "Smart 3250 board with the LPC3250 Microcontroller")
 	/* Maintainer: Kevin Wells, NXP Semiconductors */
 	.phys_io	= LPC32XX_UART5_BASE,
 	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
@@ -710,13 +710,13 @@ MACHINE_START(SMART3250_, "Phytec 3250 board with the LPC3250 Microcontroller")
 MACHINE_END
 
 ///* For backwards compatibility with older bootloaders only */
-//MACHINE_START(LPC3XXX, "Phytec 3250 board with the LPC3250 Microcontroller")
-//	/* Maintainer: Kevin Wells, NXP Semiconductors */
-//	.phys_io	= LPC32XX_UART5_BASE,
-//	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
-//	.boot_params	= 0x80000100,
-//	.map_io		= lpc32xx_map_io,
-//	.init_irq	= lpc32xx_init_irq,
-//	.timer		= &lpc32xx_timer,
-//	.init_machine	= smart3250_board_init,
-//MACHINE_END
+MACHINE_START(LPC3XXX, "Smart 3250 board with the LPC3250 Microcontroller")
+	/* Maintainer: Kevin Wells, NXP Semiconductors */
+	.phys_io	= LPC32XX_UART5_BASE,
+	.io_pg_offst	= ((IO_ADDRESS(LPC32XX_UART5_BASE))>>18) & 0xfffc,
+	.boot_params	= 0x80000100,
+	.map_io		= lpc32xx_map_io,
+	.init_irq	= lpc32xx_init_irq,
+	.timer		= &lpc32xx_timer,
+	.init_machine	= smart3250_board_init,
+MACHINE_END
