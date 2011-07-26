@@ -2,7 +2,7 @@
 
 echo Set enviorement
 
-#cd /home/diverger/Desktop/work/projects/lpc32x0/kernel/inux-2.6.34-lpc32xx
+cd /home/diverger/work/projects/lpc32x0/kernel/inux-2.6.34-lpc32xx
 
 export ARCH=arm
 export CROSS_COMPILE=arm-linux-
