@@ -136,13 +136,14 @@ static void lpc32xx_clcd_remove(struct clcd_fb *fb)
 */
 static void clcd_disable(struct clcd_fb *fb)
 {
-	gpio_set_value(BKL_POWER_GPIO, 0);
+	// Not found the relevant pin on smartarm3250 board
+	//gpio_set_value(BKL_POWER_GPIO, 0);
 	gpio_set_value(LCD_POWER_GPIO, 0);
 }
 
 static void clcd_enable(struct clcd_fb *fb)
 {
-	gpio_set_value(BKL_POWER_GPIO, 1);
+	//gpio_set_value(BKL_POWER_GPIO, 1);
 	gpio_set_value(LCD_POWER_GPIO, 1);
 }
 
