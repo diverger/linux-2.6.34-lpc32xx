@@ -345,9 +345,10 @@ static u32 mmc_translate_vdd(struct device *dev, unsigned int vdd)
 {
 	/* Only on and off are supported */
 	if (vdd != 0)
-		gpio_set_value(MMC_PWR_ENABLE_GPIO,1);
-	else
+		// Note: Smartarm3250 board use one P-channel MOS FET to control the power of SD card, when MMC_PWR_ENABLE_GPIO low, the SD/MMC is powered
 		gpio_set_value(MMC_PWR_ENABLE_GPIO,0);
+	else
+		gpio_set_value(MMC_PWR_ENABLE_GPIO,1);
 
 	return 0;
 }
