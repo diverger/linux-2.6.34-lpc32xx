@@ -626,6 +626,11 @@ static void __init smart3250_board_init(void)
 	__raw_writel((tmp | LPC32XX_CLKPWR_SSPCTRL_SSPCLK0_EN),
 		LPC32XX_CLKPWR_SSP_CLK_CTRL);
 #endif
+	
+	/* Disable UART5->USB transparent mode or USB won't work */
+	tmp = __raw_readl(LPC32XX_UARTCTL_CTRL);
+	tmp &= ~LPC32XX_UART_U5_ROUTE_TO_USB;
+	__raw_writel(tmp, LPC32XX_UARTCTL_CTRL);
 
 	platform_add_devices(smart3250_devs, ARRAY_SIZE(smart3250_devs));
 	for (i = 0; i < ARRAY_SIZE(amba_devs); i++) {
