@@ -137,13 +137,13 @@ static void lpc32xx_clcd_remove(struct clcd_fb *fb)
 static void clcd_disable(struct clcd_fb *fb)
 {
 	// Not found the relevant pin on smartarm3250 board
-	//gpio_set_value(BKL_POWER_GPIO, 0);
+	gpio_set_value(BKL_POWER_GPIO, 0);
 	gpio_set_value(LCD_POWER_GPIO, 0);
 }
 
 static void clcd_enable(struct clcd_fb *fb)
 {
-	//gpio_set_value(BKL_POWER_GPIO, 1);
+	gpio_set_value(BKL_POWER_GPIO, 1);
 	gpio_set_value(LCD_POWER_GPIO, 1);
 }
 
@@ -383,6 +383,30 @@ struct amba_device lpc32xx_mmc_device = {
 };
 #endif
 
+#if defined(CONFIG_USB_GADGET_LPC32XX)
+
+static void smart3250_usbd_conn_chg(int conn) {
+	/* Do nothing, it might be nice to enable an LED 
+	   based on conn stateg being !0 */
+}
+
+static void smart3250_usbd_susp_chg(int susp) {
+	/* Device suspend if susp != 0 */
+}
+
+static void smart3250_rmwkup_chg(int remote_wakup_enable) {
+	/* Enable or disable USB remote wakeup */
+}
+
+struct lpc32xx_usbd_cfg lpc32xx_usbddata = {
+	// GPO_04, low active
+	.vbus_drv_pol = 0,
+	.conn_chgb = &smart3250_usbd_conn_chg,
+	.susp_chgb = &smart3250_usbd_susp_chg,
+	.rmwk_chgb = &smart3250_rmwkup_chg,
+};
+
+#endif
 
 #if defined(CONFIG_MTD_NAND_SLC_LPC32XX)
 /*
