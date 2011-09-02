@@ -1,0 +1,25 @@
+KERNEL=="sd[a-z]", NAME="%k", SYMLINK+="usb%m", GROUP="users", OPTIONS="last_rule"
+#ACTION=="add", KERNEL=="sd[a-z][0-9]", SYMLINK+="usb%n", GROUP="users", NAME="%k"
+#自动挂载U盘
+ACTION=="add", KERNEL=="sd[a-z][0-9]", PROGRAM=="/lib/udev/vol_id -t %N", RESULT=="%N: uknown volume type", OPTIONS="last_rule"
+ACTION=="add", KERNEL=="sd[a-z][0-9]", RUN+="/bin/mkdir -p /mnt/usb%n"
+
+#ACTION=="add", KERNEL=="sd[a-z][0-9]", RUN+="/bin/mount -t vfat /dev/%k /mnt/usb%n"
+
+ACTION=="add", KERNEL=="sd[a-z][0-9]", PROGRAM=="/lib/udev/vol_id -t %N", RESULT=="vfat", RUN+="/bin/mount -t vfat -o rw,noauto,flush,quiet,nodev,nosuid,noexec,noatime,gid=95,dmask=000,fmask=111 /dev/%k /mnt/%k", OPTIONS="last_rule"
+ACTION=="add", KERNEL=="sd[a-z][0-9]", RUN+="/bin/mount -t auto -o rw,noauto,sync,dirsync,noexec,nodev,noatime,gid=95 /dev/%k /mnt/%k", OPTIONS="last_rule"
+
+#自动挂载SD卡
+
+ACTION=="add", KERNEL=="mmcblk[0-9][a-z][0-9]", RUN+="/bin/mkdir -p /mnt/mmc%n"
+
+ACTION=="add", KERNEL=="mmcblk[0-9][a-z][0-9]", RUN+="/bin/mount -t vfat /dev/%k /mnt/mmc%n"
+
+
+#ACTION=="add", KERNEL=="sd[a-z][0-9]", PROGRAM=="/lib/udev/vol_id -t %N", RESULT=="vfat", RUN+="/bin/mount -t vfat -o rw,noauto,sync,dirsync,noexec,nodev,noatime,dmask=000,fmask=111 /dev/%k /mnt/usb%n", OPTIONS="last_rule"
+
+#ACTION=="add", KERNEL=="sd[a-z][0-9]", RUN+="/bin/mount -t auto -o rw,noauto,sync,dirsync,noexec,nodev,noatime /dev/%k /mnt/usb%n", OPTIONS="last_rule"
+
+ACTION=="remove", KERNEL=="sd[a-z][0-9]", RUN+="/bin/umount -l /mnt/usb%n"
+
+ACTION=="remove", KERNEL=="sd[a-z][0-9]", RUN+="/bin/rmdir /mnt/usb%n", OPTIONS="last_rule"
