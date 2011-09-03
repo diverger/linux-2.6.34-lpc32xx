@@ -19,6 +19,8 @@
 #ifndef __LPC32XX_COMMON_H
 #define __LPC32XX_COMMON_H
 
+#include <linux/pm.h>
+#include <linux/suspend.h>
 #include <linux/platform_device.h>
 
 /*
@@ -67,6 +69,10 @@ extern void lpc32xx_get_uid(u32 devid[4]);
 
 extern void lpc32xx_watchdog_reset(void);
 extern u32 lpc32xx_return_iram_size(void);
+
+/* Power Management functions */
+extern void lpc32xx_irq_suspend(suspend_state_t state);
+extern void lpc32xx_irq_resume(suspend_state_t state);
 
 /*
  * Pointers used for sizing and copying suspend function data

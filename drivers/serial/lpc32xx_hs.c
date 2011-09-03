@@ -31,6 +31,8 @@
 #include <linux/io.h>
 #include <linux/irq.h>
 
+#include <mach/board.h>
+
 /*
  * High speed UART register offsets
  */
@@ -85,10 +87,6 @@
 #define LPC32XX_HSU_TX_TL16B			(0x3 << 0)
 
 #define MODNAME "lpc32xx_hsuart"
-
-struct lpc32xx_hsuart_port {
-	struct uart_port port;
-};
 
 #define FIFO_READ_LIMIT 128
 #define MAX_PORTS 3
@@ -456,6 +454,7 @@ static int serial_lpc32xx_startup(struct uart_port *port)
 	int retval;
 	unsigned long flags;
 	u32 tmp;
+	struct lpc32xx_hsuart_port *p = (struct lpc32xx_hsuart_port *)port;
 
 	spin_lock_irqsave(&port->lock, flags);
 
@@ -472,7 +471,7 @@ static int serial_lpc32xx_startup(struct uart_port *port)
 	 * and default FIFO trigger levels
 	 */
 	tmp = LPC32XX_HSU_TX_TL8B | LPC32XX_HSU_RX_TL32B |
-		LPC32XX_HSU_OFFSET(20) | LPC32XX_HSU_TMO_INACT_4B;
+		LPC32XX_HSU_OFFSET(p->fbit_sam) | LPC32XX_HSU_TMO_INACT_4B;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -491,11 +490,12 @@ static void serial_lpc32xx_shutdown(struct uart_port *port)
 {
 	u32 tmp;
 	unsigned long flags;
+	struct lpc32xx_hsuart_port *p = (struct lpc32xx_hsuart_port *)port;
 
 	spin_lock_irqsave(&port->lock, flags);
 
 	tmp = LPC32XX_HSU_TX_TL8B | LPC32XX_HSU_RX_TL32B |
-		LPC32XX_HSU_OFFSET(20) | LPC32XX_HSU_TMO_INACT_4B;
+		LPC32XX_HSU_OFFSET(p->fbit_sam) | LPC32XX_HSU_TMO_INACT_4B;
 	__raw_writel(tmp, LPC32XX_HSUART_CTRL(port->membase));
 
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -579,6 +579,7 @@ static int serial_lpc32xx_request_port(struct uart_port *port)
 static void serial_lpc32xx_config_port(struct uart_port *port, int uflags)
 {
 	int ret;
+	struct lpc32xx_hsuart_port *p = (struct lpc32xx_hsuart_port *)port;
 
 	ret = serial_lpc32xx_request_port(port);
 	if (ret < 0)
@@ -597,7 +598,7 @@ static void serial_lpc32xx_config_port(struct uart_port *port, int uflags)
 	/* Set receiver timeout, HSU offset of 20, no break, no interrupts,
 	   and default FIFO trigger levels */
 	__raw_writel(LPC32XX_HSU_TX_TL8B | LPC32XX_HSU_RX_TL32B |
-		LPC32XX_HSU_OFFSET(20) | LPC32XX_HSU_TMO_INACT_4B,
+		LPC32XX_HSU_OFFSET(p->fbit_sam) | LPC32XX_HSU_TMO_INACT_4B,
 		LPC32XX_HSUART_CTRL(port->membase));
 }
 
@@ -636,25 +637,34 @@ static struct uart_ops serial_lpc32xx_pops = {
  */
 static int __devinit serial_hs_lpc32xx_probe(struct platform_device *pdev)
 {
-	struct uart_port *p = pdev->dev.platform_data;
+	struct lpc32xx_hsuart_port *p = pdev->dev.platform_data;
 	struct lpc32xx_hsuart_port *pdr;
 	int i, ret = 0;
 
 	uarts_registered = 0;
-	for (i = 0; p && (p->flags != 0); i++) {
+	for (i = 0; p && (p->port.flags != 0); i++) {
 		pdr = &lpc32xx_hs_ports[i];
 		memset(pdr, 0, sizeof(struct lpc32xx_hsuart_port));
 
-		pdr->port.iotype	= p->iotype;
-		pdr->port.membase	= p->membase;
-		pdr->port.mapbase	= p->mapbase;
-		pdr->port.irq		= p->irq;
-		pdr->port.uartclk	= p->uartclk;
-		pdr->port.regshift	= p->regshift;
-		pdr->port.flags		= p->flags | UPF_FIXED_PORT;
+		pdr->port.iotype	= p->port.iotype;
+		pdr->port.membase	= p->port.membase;
+		pdr->port.mapbase	= p->port.mapbase;
+		pdr->port.irq		= p->port.irq;
+		pdr->port.uartclk	= p->port.uartclk;
+		pdr->port.regshift	= p->port.regshift;
+		pdr->port.flags		= p->port.flags | UPF_FIXED_PORT;
 		pdr->port.dev		= &pdev->dev;
 		pdr->port.ops		= &serial_lpc32xx_pops;
-		pdr->port.line		= p->line;
+		pdr->port.line		= p->port.line;
+		pdr->fbit_sam		= p->fbit_sam;
+
+		/* If First sample point is beyond limit,
+		 * set it to default value - 20
+		 */
+		if((pdr->fbit_sam < 0) || (pdr->fbit_sam > 31)) {
+			pdr->fbit_sam = 20;
+		}
+
 		spin_lock_init(&pdr->port.lock);
 
 		uart_add_one_port(&lpc32xx_hs_reg, &pdr->port);

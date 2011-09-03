@@ -253,6 +253,8 @@
 #define LPC32XX_CLKPWR_INTSRC_GPIO_02_BIT	_BIT(2)
 #define LPC32XX_CLKPWR_INTSRC_GPIO_01_BIT	_BIT(1)
 #define LPC32XX_CLKPWR_INTSRC_GPIO_00_BIT	_BIT(0)
+/* Reserved bits */
+#define LPC32XX_CLKPWR_INTSRC_MASK		~(0x1806FF00)
 
 /*
  * clkpwr_start_pin, clkpwr_start_raw_sts_pin, clkpwr_start_sts_pin,
@@ -281,8 +283,11 @@
 #define LPC32XX_CLKPWR_EXTSRC_GPI_07_BIT	_BIT(7)
 #define LPC32XX_CLKPWR_EXTSRC_SPI2_DATIN_BIT	_BIT(6)
 #define LPC32XX_CLKPWR_EXTSRC_GPI_19_BIT	_BIT(5)
+#define LPC32XX_CLKPWR_EXTSRC_U4_RX_BIT		 _BIT(5)
 #define LPC32XX_CLKPWR_EXTSRC_GPI_09_BIT	_BIT(4)
 #define LPC32XX_CLKPWR_EXTSRC_GPI_08_BIT	_BIT(3)
+/* Reserved bits */
+#define LPC32XX_CLKPWR_EXTSRC_MASK		~(0x28180007)
 
 /*
  * clkpwr_hclk_div register definitions

@@ -37,6 +37,14 @@
 #include <mach/dmac.h>
 #include <mach/dma.h>
 
+/*
+ * Temporary workaround for DMA/NAND support. There seems to be an issue when
+ * using dma_map_single for NAND buffers in very rare cases. When this issue
+ * happens, the NAND data will be corrupted. This tends to happen only when
+ * under heavy NAND load. For now, keep this define enabled.
+ */
+#define USE_DMA_STATIC_BUFFERS
+
 #define LPC32XX_MODNAME			"lpc32xx-nand"
 
 /*
@@ -465,58 +473,55 @@ static int lpc32xx_dma_xfer(struct mtd_info *mtd, uint8_t *buf,
 {
 	struct nand_chip *chip = mtd->priv;
 	struct lpc32xx_nand_host *host = chip->priv;
-	uint32_t config, tmpreg;
+	uint32_t config;
 	dma_addr_t buf_phy;
 	int i, timeout, dma_mapped = 0, status = 0;
 
+#ifndef USE_DMA_STATIC_BUFFERS
 	/* Map DMA buffer */
-	if (likely((void *) buf < high_memory)) {
+	if (likely((void *) buf < high_memory) {
 		buf_phy = dma_map_single(mtd->dev.parent, buf, mtd->writesize,
 			read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
-		if (unlikely(dma_mapping_error(mtd->dev.parent, buf_phy))) {
+		if (unlikely(dma_mapping_error(mtd->dev.parent, buf_phy)))
 			dev_err(mtd->dev.parent,
 				"Unable to map DMA buffer\n");
-			dma_mapped = 0;
-		} else
+		else
 			dma_mapped = 1;
 	}
+#endif
 
-	/* If a buffer can't be mapped, use the local buffer */
 	if (!dma_mapped) {
 		buf_phy = host->data_buf_dma;
 		if (!read)
 			memcpy(host->data_buf, buf, mtd->writesize);
+			/* Need map sync here? */
 	}
 
-	if (read)
+	if (read) {
 		config = DMAC_CHAN_ITC | DMAC_CHAN_IE | DMAC_CHAN_FLOW_D_P2M |
 			DMAC_DEST_PERIP (0) |
 			DMAC_SRC_PERIP(DMA_PERID_NAND1) | DMAC_CHAN_ENABLE;
-	else
+
+		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) |
+			SLCCFG_DMA_DIR | SLCCFG_ECC_EN | SLCCFG_DMA_ECC |
+			SLCCFG_DMA_BURST, SLC_CFG(host->io_base));
+	} else {
 		config = DMAC_CHAN_ITC | DMAC_CHAN_IE | DMAC_CHAN_FLOW_D_M2P |
 			DMAC_DEST_PERIP(DMA_PERID_NAND1) |
 			DMAC_SRC_PERIP (0) | DMAC_CHAN_ENABLE;
 
-	/* DMA mode with ECC enabled */
-	tmpreg = __raw_readl(SLC_CFG(host->io_base));
-	__raw_writel(SLCCFG_ECC_EN | SLCCFG_DMA_ECC | tmpreg,
-		SLC_CFG(host->io_base));
+		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) |
+			SLCCFG_ECC_EN | SLCCFG_DMA_ECC |SLCCFG_DMA_BURST,
+			SLC_CFG(host->io_base));
+		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) &
+			~SLCCFG_DMA_DIR, SLC_CFG(host->io_base));
+	}
 
 	/* Clear initial ECC */
 	__raw_writel(SLCCTRL_ECC_CLEAR, SLC_CTRL(host->io_base));
 
 	/* Prepare DMA descriptors */
 	lpc32xx_nand_dma_configure(mtd, buf_phy, chip->ecc.steps, read);
-
-	/* Setup DMA direction and burst mode */
-	if (read)
-		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) |
-			SLCCFG_DMA_DIR, SLC_CFG(host->io_base));
-	else
-		__raw_writel(__raw_readl(SLC_CFG(host->io_base)) &
-			~SLCCFG_DMA_DIR, SLC_CFG(host->io_base));
-	__raw_writel(__raw_readl(SLC_CFG(host->io_base)) | SLCCFG_DMA_BURST,
-		SLC_CFG(host->io_base));
 
 	/* Transfer size is data area only */
 	__raw_writel(mtd->writesize, SLC_TC(host->io_base));
@@ -578,17 +583,11 @@ static int lpc32xx_dma_xfer(struct mtd_info *mtd, uint8_t *buf,
 		host->ecc_buf[chip->ecc.steps - 1] =
 			__raw_readl(SLC_ECC(host->io_base));
 	else {
+		/* Just clears ECC */
 		for (i = 0; i < LPC32XX_DMA_ECC_REP_READ; i++)
 			host->ecc_buf[chip->ecc.steps - 1] =
 				__raw_readl(SLC_ECC(host->io_base));
 	}
-
-	/*
-	 * For reads, get the OOB data. For writes, the data will be written
-	 * later
-	 */
-	if (read)
-		chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	/* Flush DMA link list */
 	lpc32xx_dma_flush_llist(host->dmach);
@@ -600,16 +599,18 @@ static int lpc32xx_dma_xfer(struct mtd_info *mtd, uint8_t *buf,
 		status = -EIO;
 	}
 
+	/* Stop DMA & HW ECC */
+	__raw_writel(__raw_readl(SLC_CTRL(host->io_base)) &
+		~SLCCTRL_DMA_START, SLC_CTRL(host->io_base));
+	__raw_writel(__raw_readl(SLC_CFG(host->io_base)) & ~(SLCCFG_DMA_DIR |
+		SLCCFG_ECC_EN | SLCCFG_DMA_ECC | SLCCFG_DMA_BURST),
+		SLC_CFG(host->io_base));
+
 	if (dma_mapped)
 		dma_unmap_single(mtd->dev.parent, buf_phy, mtd->writesize,
 			read ? DMA_FROM_DEVICE : DMA_TO_DEVICE);
 	else if (read)
 		memcpy(buf, host->data_buf, mtd->writesize);
-
-	/* Stop DMA & HW ECC */
-	__raw_writel(__raw_readl(SLC_CTRL(host->io_base)) &
-		~SLCCTRL_DMA_START, SLC_CTRL(host->io_base));
-	__raw_writel(tmpreg, SLC_CFG(host->io_base));
 
 	return status;
 }
@@ -630,6 +631,9 @@ static int lpc32xx_nand_read_page_syndrome(struct mtd_info *mtd,
 
 	/* Read data and oob, calculate ECC */
 	status = lpc32xx_dma_xfer(mtd, buf, chip->ecc.steps, 1);
+
+	/* Get OOB data */
+	chip->read_buf(mtd, chip->oob_poi, mtd->oobsize);
 
 	/* Convert to stored ECC format */
 	lpc32xx_slc_ecc_copy(tmpecc, (uint32_t *) host->ecc_buf,

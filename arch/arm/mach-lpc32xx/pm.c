@@ -112,6 +112,8 @@ static int lpc32xx_pm_enter(suspend_state_t state)
 {
 	int ret = 0;
 
+	lpc32xx_irq_suspend(state);
+
 	switch (state)
 	{
 		case PM_SUSPEND_STANDBY:
@@ -121,6 +123,8 @@ static int lpc32xx_pm_enter(suspend_state_t state)
 			ret = lpc32xx_suspend();
 			break;
 	}
+
+	lpc32xx_irq_resume(state);
 
 	return ret;
 }

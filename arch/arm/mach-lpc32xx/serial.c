@@ -27,6 +27,7 @@
 
 #include <mach/hardware.h>
 #include <mach/platform.h>
+#include <mach/board.h>
 #include "common.h"
 
 #define LPC32XX_SUART_FIFO_SIZE	64
@@ -140,35 +141,44 @@ static struct platform_device serial_std_platform_device = {
 };
 
 /* High speed serial ports */
-static struct uart_port serial_hspd_platform_data[] = {
+static struct lpc32xx_hsuart_port serial_hspd_platform_data[] = {
 #ifdef CONFIG_ARCH_LPC32XX_HSUART1_SELECT
 	{
-		.membase        = io_p2v(LPC32XX_HS_UART1_BASE),
-		.mapbase        = LPC32XX_HS_UART1_BASE,
-		.irq            = IRQ_LPC32XX_UART_IIR1,
-		.regshift       = 2,
-		.iotype         = UPIO_MEM32,
-		.flags          = UPF_BOOT_AUTOCONF,
+		.port 					= {
+			.membase        = io_p2v(LPC32XX_HS_UART1_BASE),
+			.mapbase        = LPC32XX_HS_UART1_BASE,
+			.irq            = IRQ_LPC32XX_UART_IIR1,
+			.regshift       = 2,
+			.iotype         = UPIO_MEM32,
+			.flags          = UPF_BOOT_AUTOCONF,
+		},
+		.fbit_sam       = 20,
 	},
 #endif
 #ifdef CONFIG_ARCH_LPC32XX_HSUART2_SELECT
 	{
-		.membase        = io_p2v(LPC32XX_HS_UART2_BASE),
-		.mapbase        = LPC32XX_HS_UART2_BASE,
-		.irq            = IRQ_LPC32XX_UART_IIR2,
-		.regshift       = 2,
-		.iotype         = UPIO_MEM32,
-		.flags          = UPF_BOOT_AUTOCONF,
+		.port 					= {
+			.membase        = io_p2v(LPC32XX_HS_UART2_BASE),
+			.mapbase        = LPC32XX_HS_UART2_BASE,
+			.irq            = IRQ_LPC32XX_UART_IIR2,
+			.regshift       = 2,
+			.iotype         = UPIO_MEM32,
+			.flags          = UPF_BOOT_AUTOCONF,
+		},
+		.fbit_sam       = 20,
 	},
 #endif
 #ifdef CONFIG_ARCH_LPC32XX_HSUART7_SELECT
 	{
-		.membase        = io_p2v(LPC32XX_HS_UART7_BASE),
-		.mapbase        = LPC32XX_HS_UART7_BASE,
-		.irq            = IRQ_LPC32XX_UART_IIR7,
-		.regshift       = 2,
-		.iotype         = UPIO_MEM32,
-		.flags          = UPF_BOOT_AUTOCONF,
+		.port 					= {
+			.membase        = io_p2v(LPC32XX_HS_UART7_BASE),
+			.mapbase        = LPC32XX_HS_UART7_BASE,
+			.irq            = IRQ_LPC32XX_UART_IIR7,
+			.regshift       = 2,
+			.iotype         = UPIO_MEM32,
+			.flags          = UPF_BOOT_AUTOCONF,
+		},
+		.fbit_sam       = 20,
 	},
 #endif
 	{ },
@@ -269,8 +279,8 @@ void __init lpc32xx_serial_init(void)
 
         /* Setup of HSUART devices */
         for (i = 0; i < ARRAY_SIZE(serial_hspd_platform_data) - 1; i++) {
-                serial_hspd_platform_data[i].line = i;
-                serial_hspd_platform_data[i].uartclk = tmpclk;
+                serial_hspd_platform_data[i].port.line = i;
+                serial_hspd_platform_data[i].port.uartclk = tmpclk;
 	}
 
 	/* Disable UART5->USB transparent mode or USB won't work */

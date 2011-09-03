@@ -16,6 +16,12 @@
  * GNU General Public License for more details.
  */
 
+#ifdef CONFIG_PM_DEBUG
+#define DEBUG
+#endif
+
+#include <linux/pm.h>
+#include <linux/suspend.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/interrupt.h>
@@ -29,21 +35,7 @@
 #include <mach/platform.h>
 #include "common.h"
 
-/*
- * Default value representing the Activation polarity of all internal
- * interrupt sources
- */
-#define MIC_APR_DEFAULT		0x3FF0EFE0
-#define SIC1_APR_DEFAULT	0xFBD27186
-#define SIC2_APR_DEFAULT	0x801810C0
-
-/*
- * Default value representing the Activation Type of all internal
- * interrupt sources. All are level sensitive.
- */
-#define MIC_ATR_DEFAULT		0x00000000
-#define SIC1_ATR_DEFAULT	0x00026000
-#define SIC2_ATR_DEFAULT	0x00000000
+unsigned int wakeupirq = -1;
 
 struct lpc32xx_event_group_regs {
 	void __iomem *enab_reg;
@@ -69,6 +61,43 @@ static const struct lpc32xx_event_group_regs lpc32xx_event_pin_regs = {
 struct lpc32xx_event_info {
 	const struct lpc32xx_event_group_regs *event_group;
 	u32 mask;
+};
+
+static const char *lpc32xx_irqname[NR_IRQS] = {
+	[IRQ_LPC32XX_GPI_08] = "GPI_08",
+	[IRQ_LPC32XX_GPI_09] = "GPI_09",
+	[IRQ_LPC32XX_GPI_19] = "GPI_19",
+	[IRQ_LPC32XX_GPI_07] = "GPI_07",
+	[IRQ_LPC32XX_GPI_00] = "GPI_00",
+	[IRQ_LPC32XX_GPI_01] = "GPI_01",
+	[IRQ_LPC32XX_GPI_02] = "GPI_02",
+	[IRQ_LPC32XX_GPI_03] = "GPI_03",
+	[IRQ_LPC32XX_GPI_04] = "GPI_04",
+	[IRQ_LPC32XX_GPI_05] = "GPI_05",
+	[IRQ_LPC32XX_GPI_06] = "GPI_06",
+	[IRQ_LPC32XX_GPI_28] = "GPI_28",
+	[IRQ_LPC32XX_UART_IIR1] = "Uart_1",
+	[IRQ_LPC32XX_UART_IIR2] = "Uart_2",
+	[IRQ_LPC32XX_UART_IIR3] = "Uart_3",
+	[IRQ_LPC32XX_UART_IIR4] = "Uart_4",
+	[IRQ_LPC32XX_UART_IIR5] = "Uart_5",
+	[IRQ_LPC32XX_UART_IIR6] = "Uart_6",
+	[IRQ_LPC32XX_UART_IIR7] = "Uart_7",
+	[IRQ_LPC32XX_GPIO_00] = "GPIO_00",
+	[IRQ_LPC32XX_GPIO_01] = "GPIO_01",
+	[IRQ_LPC32XX_GPIO_02] = "GPIO_02",
+	[IRQ_LPC32XX_GPIO_03] = "GPIO_03",
+	[IRQ_LPC32XX_GPIO_04] = "GPIO_04",
+	[IRQ_LPC32XX_GPIO_05] = "GPIO_05",
+	[IRQ_LPC32XX_ETHERNET]    = "Ethernet",
+	[IRQ_LPC32XX_KEY]         = "Keyboard",
+	[IRQ_LPC32XX_USB_OTG_ATX] = "USB_OTG",
+	[IRQ_LPC32XX_USB_HOST]    = "USB_Host",
+	[IRQ_LPC32XX_RTC]     = "RTC",
+	[IRQ_LPC32XX_MSTIMER] = "MS_Timer",
+	[IRQ_LPC32XX_TS_AUX]  = "TS_AUX",
+	[IRQ_LPC32XX_TS_P]    = "TS_P",
+	[IRQ_LPC32XX_TS_IRQ]  = "TS_IRQ",
 };
 
 /*
@@ -125,6 +154,35 @@ static const struct lpc32xx_event_info lpc32xx_events[NR_IRQS] = {
 		.event_group = &lpc32xx_event_pin_regs,
 		.mask = LPC32XX_CLKPWR_EXTSRC_GPI_28_BIT,
 	},
+  /* UART */
+	[IRQ_LPC32XX_UART_IIR1] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U1_RX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR2] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U2_RX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR3] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U3_RX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR4] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U4_RX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR5] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U5_RX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR6] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U6_IRRX_BIT,
+	},
+	[IRQ_LPC32XX_UART_IIR7] = {
+		.event_group = &lpc32xx_event_pin_regs,
+		.mask = LPC32XX_CLKPWR_EXTSRC_U7_RX_BIT,
+	},
 	[IRQ_LPC32XX_GPIO_00] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_GPIO_00_BIT,
@@ -153,10 +211,10 @@ static const struct lpc32xx_event_info lpc32xx_events[NR_IRQS] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_KEY_BIT,
 	},
-        [IRQ_LPC32XX_ETHERNET] = {
-                .event_group = &lpc32xx_event_int_regs,
-                .mask = LPC32XX_CLKPWR_INTSRC_MAC_BIT,
-        },
+	[IRQ_LPC32XX_ETHERNET] = {
+		.event_group = &lpc32xx_event_int_regs,
+		.mask = LPC32XX_CLKPWR_INTSRC_MAC_BIT,
+	},
 	[IRQ_LPC32XX_USB_OTG_ATX] = {
 		.event_group = &lpc32xx_event_int_regs,
 		.mask = LPC32XX_CLKPWR_INTSRC_USBATXINT_BIT,
@@ -303,9 +361,168 @@ static int lpc32xx_set_irq_type(unsigned int irq, unsigned int type)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static u32 backup_irqs[NR_IRQ_CTRLS];
+static u32 wakeup_irqs[NR_IRQ_CTRLS];
+
+static ssize_t wakeup_event_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	if(wakeupirq < 0) {
+		return 0;
+	}
+
+	return sprintf(buf, "%s\n", lpc32xx_irqname[wakeupirq]);
+}
+static struct kobj_attribute wakeup_event_attr =
+			__ATTR(wakeup_event, 0644, wakeup_event_show, NULL);
+#endif
+
+void lpc32xx_irq_suspend(suspend_state_t state)
+{
+#ifdef CONFIG_PM
+	unsigned int i, ctrl, mask;
+
+	for( i=0; i < NR_IRQ_CTRLS; i++) {
+		get_controller((i*32), &ctrl, &mask);
+
+		/* Backup programmed IRQs */
+		backup_irqs[i] = __raw_readl(LPC32XX_INTC_MASK(ctrl));
+
+		/* Disable all interrupts */
+		__raw_writel(0, LPC32XX_INTC_MASK(ctrl));
+
+		if(state == PM_SUSPEND_STANDBY) {
+			pr_debug("Wakeup_irq[%d] = 0x%08X\n", i, wakeup_irqs[i] );
+
+			/* Program interrupts only in standby because of DDR wakeup issues*/
+			__raw_writel( wakeup_irqs[i], LPC32XX_INTC_RAW_STAT(ctrl));
+			__raw_writel( wakeup_irqs[i], LPC32XX_INTC_MASK(ctrl));
+		}
+	}
+
+	if(state == PM_SUSPEND_MEM)	{
+		pr_debug("Start_enable_pin = 0x%X\n",
+				__raw_readl(lpc32xx_event_pin_regs.enab_reg));
+		pr_debug("Start_enable_internal = 0x%X\n",
+				__raw_readl(lpc32xx_event_int_regs.enab_reg));
+	}
+
+	/* Clear Raw Status registers */
+	__raw_writel(LPC32XX_CLKPWR_EXTSRC_MASK,
+			lpc32xx_event_pin_regs.rawstat_reg);
+	__raw_writel(LPC32XX_CLKPWR_INTSRC_MASK,
+			lpc32xx_event_int_regs.rawstat_reg);
+
+	sysfs_remove_file(power_kobj, &wakeup_event_attr.attr);
+#endif
+}
+
+void lpc32xx_irq_resume(suspend_state_t state)
+{
+#ifdef CONFIG_PM
+	unsigned int i, ctrl, mask;
+	unsigned int pinRegMask, intRegMask;
+	unsigned int statusReg = 0;
+
+	pinRegMask = __raw_readl(lpc32xx_event_pin_regs.maskstat_reg);
+	intRegMask = __raw_readl(lpc32xx_event_int_regs.maskstat_reg);
+	pr_debug("Pin Register wakeup mask = 0x%X\n", pinRegMask);
+	pr_debug("Int Register wakeup mask = 0x%X\n", intRegMask);
+
+	/* Scan all lpc32xx_events to find who woke up */
+	for(i=0; i< NR_IRQS; i++) {
+		/* Check IRQ can be defined as wakeup IRQ */
+		if (lpc32xx_events[i].mask != 0) {
+			pr_debug("Scan IRQ %d\n",i);
+			if((lpc32xx_events[i].event_group->enab_reg == lpc32xx_event_pin_regs.enab_reg)
+					&& pinRegMask) {
+				pr_debug("Test mask 0x%X\n",lpc32xx_events[i].mask);
+				if(lpc32xx_events[i].mask == pinRegMask) {
+					wakeupirq = i;
+					break;
+				}
+			}
+
+			if((lpc32xx_events[i].event_group->enab_reg == lpc32xx_event_int_regs.enab_reg)
+					&& intRegMask) {
+				pr_debug("Test mask 0x%X\n",lpc32xx_events[i].mask);
+				if(lpc32xx_events[i].mask == intRegMask) {
+					wakeupirq = i;
+					break;
+				}
+			}
+		}
+	}
+
+	/* Clear Raw Status registers */
+	__raw_writel(LPC32XX_CLKPWR_EXTSRC_MASK,
+			lpc32xx_event_pin_regs.rawstat_reg);
+	__raw_writel(LPC32XX_CLKPWR_INTSRC_MASK,
+			lpc32xx_event_int_regs.rawstat_reg);
+
+	for( i=0; i < NR_IRQ_CTRLS; i++) {
+		get_controller( (i*32), &ctrl, &mask);
+
+		statusReg = __raw_readl(LPC32XX_INTC_STAT(ctrl));
+
+		pr_debug("statusReg %d = 0x%08X\n",i,statusReg);
+
+		/* Disable all interrupts */
+		__raw_writel( 0, LPC32XX_INTC_MASK(ctrl));
+
+		/* Clear Wakeup pending interrupts */
+		__raw_writel(wakeup_irqs[i], LPC32XX_INTC_RAW_STAT(ctrl));
+
+		/* Restore old controller config */
+		__raw_writel(backup_irqs[i], LPC32XX_INTC_MASK(ctrl));
+	}
+
+	if(wakeupirq > 0) {
+		pr_debug("Wakeup source: %s\n", lpc32xx_irqname[wakeupirq]);
+		sysfs_create_file(power_kobj, &wakeup_event_attr.attr);
+	}
+#endif
+}
+
 static int lpc32xx_irq_wake(unsigned int irqno, unsigned int state)
 {
 	unsigned long eventreg;
+	unsigned int ctrl_nr, ctrl, mask;
+
+	if (unlikely(irqno >= (32 * NR_IRQ_CTRLS))) {
+		return -EINVAL;
+	}
+
+	get_controller(irqno, &ctrl, &mask);
+	ctrl_nr = irqno / 32;
+
+#ifdef CONFIG_PM_DEBUG
+	if (state) {
+		pr_debug("Set irq %d as wakeup IRQ\n", irqno);
+		wakeup_irqs[ctrl_nr] |= mask;
+		if( ctrl_nr == 1 ) {
+			wakeup_irqs[0] |= ( 1<<IRQ_LPC32XX_SUB1IRQ );
+		}
+		if( ctrl_nr == 2 ) {
+			wakeup_irqs[0] |= ( 1<<IRQ_LPC32XX_SUB2IRQ );
+		}
+	}
+	else
+	{
+		pr_debug("Disable wakeup from irq %d \n", irqno);
+		wakeup_irqs[ctrl_nr] &= ~mask;
+		if( (ctrl_nr == 1) && (wakeup_irqs[1] == 0) )
+			wakeup_irqs[0] &= ~( 1<<IRQ_LPC32XX_SUB1IRQ );
+		if( (ctrl_nr == 2) && (wakeup_irqs[2] == 0) )
+				wakeup_irqs[0] &= ~( 1<<IRQ_LPC32XX_SUB2IRQ );
+	}
+#endif
+
+	if ( lpc32xx_events[irqno].mask == 0 ) {
+		pr_warning("Can't configure irq %d as wakeup source\n",irqno);
+		return 0;
+	}
 
 	if (lpc32xx_events[irqno].mask != 0) {
 		eventreg = __raw_readl(lpc32xx_events[irqno].
@@ -330,6 +547,9 @@ static int lpc32xx_irq_wake(unsigned int irqno, unsigned int state)
 
 		return 0;
 	}
+
+	__raw_writel(lpc32xx_events[irqno].mask,
+		lpc32xx_events[irqno].event_group->rawstat_reg);
 
 	return -ENODEV;
 }
@@ -414,7 +634,9 @@ void __init lpc32xx_init_irq(void)
 	lpc32xx_set_default_mappings(SIC2_APR_DEFAULT, SIC2_ATR_DEFAULT, 64);
 
 	/* mask all interrupts except SUBIRQ */
-	__raw_writel(0, LPC32XX_INTC_MASK(LPC32XX_MIC_BASE));
+	__raw_writel((1 << IRQ_LPC32XX_SUB1IRQ) | (1 << IRQ_LPC32XX_SUB2IRQ) |
+			(1 << IRQ_LPC32XX_SUB1FIQ) | (1 << IRQ_LPC32XX_SUB2FIQ),
+			LPC32XX_INTC_MASK(LPC32XX_MIC_BASE));
 	__raw_writel(0, LPC32XX_INTC_MASK(LPC32XX_SIC1_BASE));
 	__raw_writel(0, LPC32XX_INTC_MASK(LPC32XX_SIC2_BASE));
 
@@ -426,16 +648,6 @@ void __init lpc32xx_init_irq(void)
 	__raw_writel(0, LPC32XX_CLKPWR_P01_ER);
 	__raw_writel(0, LPC32XX_CLKPWR_INT_ER);
 	__raw_writel(0, LPC32XX_CLKPWR_PIN_ER);
-
-	/*
-	 * Default wake activation polarities, all pin sources are low edge
-	 * triggered
-	 */
-	__raw_writel(LPC32XX_CLKPWR_INTSRC_TS_P_BIT |
-		LPC32XX_CLKPWR_INTSRC_MSTIMER_BIT |
-		LPC32XX_CLKPWR_INTSRC_RTC_BIT,
-		LPC32XX_CLKPWR_INT_AP);
-	__raw_writel(0, LPC32XX_CLKPWR_PIN_AP);
 
 	/* Clear latched wake event states */
 	__raw_writel(__raw_readl(LPC32XX_CLKPWR_PIN_RS),
