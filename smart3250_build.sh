@@ -14,3 +14,4 @@ make ARCH=arm CROSS_COMPILE=arm-linux- smart3250_defconfig
 make ARCH=arm CROSS_COMPILE=arm-linux- uImage
 make ARCH=arm CROSS_COMPILE=arm-linux- modules
 make ARCH=arm CROSS_COMPILE=arm-linux- INSTALL_MOD_PATH=/home/diverger/work/projects/eldk42/arm modules_install
+make ARCH=arm CROSS_COMPILE=arm-linux- INSTALL_MOD_PATH=/home/diverger/work/projects/eldk42/armVFP modules_install
