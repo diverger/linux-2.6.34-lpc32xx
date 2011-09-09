@@ -26,6 +26,11 @@ choice
         help
             Support for the Smart 3250 development board
 
+    config MACH_HANDY3250
+        bool "Handy 3250 development board"
+        help
+            Support for the Handy 3250 development board
+
 endchoice
 
 menu "Embedded Artists Display Selection"
